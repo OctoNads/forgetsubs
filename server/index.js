@@ -1,5 +1,3 @@
-// Full Server-side index.js – FIXED for international banks + complete referral routes
-
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
@@ -10,23 +8,21 @@ const { createClient } = require('@supabase/supabase-js');
 const { createPublicClient, http, parseEventLogs } = require('viem');
 const { mainnet, bsc, base } = require('viem/chains');
 const { parseUnits } = require('viem');
+const { recoverMessageAddress } = require('viem');
 
 dotenv.config();
 
 const app = express();
 const PORT = 5000;
 
-// Middleware
 app.use(cors());
 app.use(express.json());
 
-// Upload Setup (Store files in memory)
 const upload = multer({ storage: multer.memoryStorage() });
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const RECEIVER_WALLET = "0xACe6f654b9cb7d775071e13549277aCd17652EAF"; // from your frontend code
+const RECEIVER_WALLET = "0xACe6f654b9cb7d775071e13549277aCd17652EAF";
 
-// Define Monad chain
 const monad = {
   id: 143,
   name: 'Monad Mainnet',
@@ -41,10 +37,8 @@ const monad = {
   testnet: false,
 };
 
-// Initialize Supabase
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 
-// Helper: Extract Text from PDF Buffer
 async function extractTextFromPDF(buffer) {
   return new Promise((resolve, reject) => {
     const pdfParser = new PDFParser(null, true);
@@ -56,44 +50,27 @@ async function extractTextFromPDF(buffer) {
   });
 }
 
-// IMPROVED: Safe, international redaction – preserve transactions at all costs
 function redactSensitiveInfo(text) {
   let redacted = text;
-
-  // 1. Account/IBAN numbers (8–20 digits, grouped or continuous)
   redacted = redacted.replace(/\b(?:\d{4}[ -]?){2,5}\d{4}\b|\b\d{8,20}\b/g, '[REDACTED_ACCOUNT]');
-
-  // 2. Names after common banking prefixes (very targeted)
   const namePrefixes = 'Account Holder|Customer Name|Name|Holder|Client|Titular|Beneficiary|Payee|Welcome|Dear|To|From|Full Name|Nominee|Authorized';
   redacted = redacted.replace(
     new RegExp(`(${namePrefixes})\\s*[:\\s=]+[A-Za-zÀ-ÿ\\s'-]{3,40}`, 'gi'),
     '$1: [REDACTED_NAME]'
   );
-
-  // 3. Addresses (after address-related keywords)
   const addrKeywords = 'Address|Residence|Home Address|Mailing Address|Billing Address|Registered Address|My Address|Correspondence';
   redacted = redacted.replace(
     new RegExp(`(${addrKeywords})\\s*[:\\s=]+[^\\n\\r]{10,120}`, 'gi'),
     '$1: [REDACTED_ADDRESS]'
   );
-
-  // 4. Phones (international formats)
   redacted = redacted.replace(
     /(\+?\d{1,4}[-.\s]?)?(\(?\d{2,5}\)?[-.\s]?\d{3,5}[-.\s]?\d{3,6})/g,
     '[REDACTED_PHONE]'
   );
-
-  // 5. Emails
   redacted = redacted.replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g, '[REDACTED_EMAIL]');
-
-  // 6. Credit/Debit Cards (13–19 digits)
   redacted = redacted.replace(/\b(?:\d{4}[ -]?){3,4}\d{3,4}\b/g, '[REDACTED_CARD]');
-
-  // 7. Selective national IDs (avoid over-matching)
-  redacted = redacted.replace(/\b\d{3}-\d{2}-\d{4}\b/g, '[REDACTED_SSN]'); // US SSN
-  redacted = redacted.replace(/[A-Z]{5}\d{4}[A-Z]/g, '[REDACTED_PAN]'); // Indian PAN
-  // Do NOT redact generic numbers (transactions, dates, amounts, UPI IDs, etc.)
-
+  redacted = redacted.replace(/\b\d{3}-\d{2}-\d{4}\b/g, '[REDACTED_SSN]');
+  redacted = redacted.replace(/[A-Z]{5}\d{4}[A-Z]/g, '[REDACTED_PAN]');
   return redacted;
 }
 
@@ -266,12 +243,11 @@ app.post('/api/referral-click', async (req, res) => {
   }
 });
 
-// === CLAIM REFERRAL REWARD (after 5 USDC payment) ===
+// Claim referral reward (now credits both earnings and available_balance)
 app.post('/api/claim-referral', async (req, res) => {
   try {
     const { referrerCode, txHash, chainId, payerAddress } = req.body;
 
-    // Prevent replay attacks
     const { data: alreadyClaimed } = await supabase
       .from('claimed_tx')
       .select('id')
@@ -281,7 +257,6 @@ app.post('/api/claim-referral', async (req, res) => {
 
     if (alreadyClaimed) return res.json({ success: false, message: 'Already claimed' });
 
-    // Find referrer
     const { data: referrer } = await supabase
       .from('users')
       .select('address')
@@ -292,7 +267,6 @@ app.post('/api/claim-referral', async (req, res) => {
       return res.json({ success: false, message: 'Invalid or self referral' });
     }
 
-    // Verify transaction on-chain
     const chainMap = { 1: mainnet, 56: bsc, 8453: base, 143: monad };
     const chain = chainMap[chainId];
     if (!chain) return res.status(400).json({ error: 'Unsupported chain' });
@@ -330,11 +304,10 @@ app.post('/api/claim-referral', async (req, res) => {
       return res.status(400).json({ error: 'Payment not verified' });
     }
 
-    // Credit referrer: 1.5 USDC reward
     const reward = 1.5;
     const { data: current } = await supabase
       .from('users')
-      .select('successful_refers, earnings')
+      .select('successful_refers, earnings, available_balance')
       .eq('address', referrer.address)
       .single();
 
@@ -342,11 +315,11 @@ app.post('/api/claim-referral', async (req, res) => {
       .from('users')
       .update({
         successful_refers: current.successful_refers + 1,
-        earnings: current.earnings + reward
+        earnings: (current.earnings || 0) + reward,
+        available_balance: (current.available_balance || 0) + reward
       })
       .eq('address', referrer.address);
 
-    // Record the referral
     await supabase
       .from('successful_referrals')
       .insert({
@@ -356,7 +329,6 @@ app.post('/api/claim-referral', async (req, res) => {
         chain_id: chainId
       });
 
-    // Mark tx as claimed
     await supabase
       .from('claimed_tx')
       .insert({ tx_hash: txHash, chain_id: chainId });
@@ -368,9 +340,90 @@ app.post('/api/claim-referral', async (req, res) => {
   }
 });
 
-// Mock routes (optional)
-app.post('/api/user', (req, res) => res.json({ success: true }));
-app.post('/api/refer/conversion', (req, res) => res.json({ success: true }));
+// NEW: Secure Withdrawal Request
+app.post('/api/withdraw', async (req, res) => {
+  try {
+    const { address, amount, token, chainId, toAddress, signature, timestamp } = req.body;
+
+    if (!address || !amount || !token || !chainId || !toAddress || !signature || !timestamp) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    if (isNaN(amount) || amount < 5) {
+      return res.status(400).json({ error: 'Minimum withdrawal is $5' });
+    }
+
+    if (Date.now() - parseInt(timestamp) > 300000) {
+      return res.status(400).json({ error: 'Request expired' });
+    }
+
+    if (!['USDC', 'USDT'].includes(token)) {
+      return res.status(400).json({ error: 'Invalid token' });
+    }
+
+    if (!['1', '56', '8453', '143'].includes(chainId.toString())) {
+      return res.status(400).json({ error: 'Unsupported network' });
+    }
+
+    if (!/^0x[a-fA-F0-9]{40}$/.test(toAddress)) {
+      return res.status(400).json({ error: 'Invalid receiving address' });
+    }
+
+    const message = `ForgetSubs withdrawal request: ${amount} ${token} to ${toAddress} on chain ${chainId} timestamp:${timestamp}`;
+    const recoveredAddress = await recoverMessageAddress({ message, signature });
+
+    if (recoveredAddress.toLowerCase() !== address.toLowerCase()) {
+      return res.status(401).json({ error: 'Invalid signature – unauthorized' });
+    }
+
+    const { data: user, error: userError } = await supabase
+      .from('users')
+      .select('available_balance')
+      .eq('address', address.toLowerCase())
+      .single();
+
+    if (userError || !user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if ((user.available_balance || 0) < amount) {
+      return res.status(400).json({ error: 'Insufficient available balance' });
+    }
+
+    const { error: deductError } = await supabase
+      .from('users')
+      .update({ available_balance: user.available_balance - amount })
+      .eq('address', address.toLowerCase());
+
+    if (deductError) throw deductError;
+
+    const { error: insertError } = await supabase
+      .from('withdrawals')
+      .insert({
+        user_address: address.toLowerCase(),
+        amount,
+        token,
+        chain_id: parseInt(chainId),
+        to_address: toAddress,
+        status: 'pending',
+        created_at: new Date().toISOString()
+      });
+
+    if (insertError) {
+      // Rollback on failure
+      await supabase
+        .from('users')
+        .update({ available_balance: user.available_balance })
+        .eq('address', address.toLowerCase());
+      throw insertError;
+    }
+
+    res.json({ success: true, message: 'Withdrawal request submitted' });
+  } catch (err) {
+    console.error('Withdrawal error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);

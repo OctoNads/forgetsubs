@@ -379,7 +379,7 @@ const HomePage = () => {
 
       <header className="hero">
         <h1>Stop the <span className="gradient-text">Money Leak.</span></h1>
-        <h3>Track Forgotten Subscription , Cancel & <span className="gradient-text">Save</span></h3>
+        <h3>Track Forgotten Subscription , Cancel & <span className="gradient-text">Save upto $700 .</span></h3>
 
         
 
