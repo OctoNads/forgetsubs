@@ -18,7 +18,7 @@ import { PrivacyPage, TermsPage } from './LegalPages';
 
 ChartJS.register(ArcElement, Tooltip, Legend);
 
-const API_URL = 'http://localhost:5000/api'; 
+const API_URL = import.meta.env.VITE_API_URL
 const SUBSCRIPTION_ICONS = [
   { name: "Netflix", src: "https://cdn.simpleicons.org/netflix/ffffff" },
   { name: "Spotify", src: "https://cdn.simpleicons.org/spotify/ffffff" },
