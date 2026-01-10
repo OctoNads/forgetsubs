@@ -10,7 +10,7 @@ import { Pie } from 'react-chartjs-2';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount, useWriteContract, usePublicClient, useReadContract } from 'wagmi';
 import { parseUnits, erc20Abi, erc721Abi } from 'viem';
-import { Routes, Route, useNavigate, useSearchParams, Link, useLocation } from 'react-router-dom';
+import { Routes, Route, useSearchParams, Link, useLocation } from 'react-router-dom';
 
 import './App.css';
 import ReferPage from './ReferPage';
@@ -20,12 +20,88 @@ ChartJS.register(ArcElement, Tooltip, Legend);
 
 const API_URL = import.meta.env.VITE_API_URL
 const SUBSCRIPTION_ICONS = [
-  { name: "Netflix", src: "https://cdn.simpleicons.org/netflix/ffffff" },
-  { name: "Spotify", src: "https://cdn.simpleicons.org/spotify/ffffff" },
-  { name: "Disney+", src: "https://cdn.simpleicons.org/disneyplus/ffffff" },
-  { name: "Amazon Prime", src: "https://cdn.simpleicons.org/amazon/ffffff" },
-  { name: "Adobe", src: "https://cdn.simpleicons.org/adobe/ffffff" },
+  { 
+    name: "Netflix", 
+    src: "https://upload.wikimedia.org/wikipedia/commons/0/08/Netflix_2015_logo.svg" 
+  },
+  { 
+    name: "Spotify", 
+    src: "https://upload.wikimedia.org/wikipedia/commons/1/19/Spotify_logo_without_text.svg" 
+  },
+  { 
+    name: "Disney+", 
+    src: "https://upload.wikimedia.org/wikipedia/commons/3/3e/Disney%2B_logo.svg" 
+  },
+  { 
+    name: "Amazon Prime", 
+    src: "https://upload.wikimedia.org/wikipedia/commons/1/11/Amazon_Prime_Video_logo.svg" 
+  },
+  { 
+    name: "Adobe", 
+    src: "https://www.clipartmax.com/png/middle/207-2078951_logo-adobe-creative-cloud-logo-png.png" 
+  },
+  { 
+    name: "Hulu", 
+    src: "https://download.logo.wine/logo/Hulu/Hulu-Logo.wine.png"
+  },
+  
+  { 
+    name: "Audible", 
+    src: "https://cdn.freebiesupply.com/logos/thumbs/2x/audible-logo.png" 
+  },
+  { 
+    name: "Discord", 
+    src: "https://pngimg.com/d/discord_PNG11.png" 
+  },
+  { 
+    name: "Google One", 
+    src: "https://cdn.freebiesupply.com/logos/thumbs/2x/google-1-logo.png" 
+  },
+  { 
+    name: "NordVPN", 
+    src: "https://1000logos.net/wp-content/uploads/2022/08/NordVPN-Emblem.png" 
+  },
+  { 
+    name: "Paramount+", 
+    src: "https://www.pngall.com/wp-content/uploads/15/Paramount-Plus-Logo-No-Background.png" 
+  },
+  { 
+    name: "SoundCloud", 
+    src: "https://www.nicepng.com/png/detail/18-183578_soundcloud-logo.png" 
+  },
+  { 
+    name: "Canva", 
+    src: "https://1000logos.net/wp-content/uploads/2023/02/Canva-Logo-2013.png" 
+  },
+
+  // --- EXTRAS FOR VARIETY ---
+  { 
+    name: "YouTube Premium", 
+    src: "https://upload.wikimedia.org/wikipedia/commons/d/dd/YouTube_Premium_logo.svg" 
+  },
+  { 
+    name: "Max (HBO)", 
+    src: "https://upload.wikimedia.org/wikipedia/commons/c/ce/Max_logo.svg" 
+  },
+  { 
+    name: "Twitch", 
+    src: "https://upload.wikimedia.org/wikipedia/commons/d/d3/Twitch_Glitch_Logo_Purple.svg" 
+  },
+  { 
+    name: "Apple TV+", 
+    src: "https://upload.wikimedia.org/wikipedia/commons/2/28/Apple_TV_Plus_Logo.svg" 
+  },
+  { 
+    name: "Microsoft 365", 
+    src: "https://upload.wikimedia.org/wikipedia/commons/4/44/Microsoft_logo.svg" 
+  },
+  { 
+    name: "ChatGPT", 
+    src: "https://upload.wikimedia.org/wikipedia/commons/0/04/ChatGPT_logo.svg",
+    style: { filter: "invert(1)" } 
+  }
 ];
+
 
 const RECEIVER_WALLET = "0xACe6f654b9cb7d775071e13549277aCd17652EAF";
 const OCTONADS_CONTRACT = "0x51840Af9f4b780556DEdE2C7aDa0d4344034a65f";
@@ -303,15 +379,9 @@ const HomePage = () => {
 
       <header className="hero">
         <h1>Stop the <span className="gradient-text">Money Leak.</span></h1>
-        <h3>Track, Cancel & <span className="gradient-text">Save</span></h3>
+        <h3>Track Forgotten Subscription , Cancel & <span className="gradient-text">Save</span></h3>
 
-        <div className="ticker-mask">
-          <div className="ticker-track">
-            {[...SUBSCRIPTION_ICONS, ...SUBSCRIPTION_ICONS].map((icon, i) => (
-              <img key={i} src={icon.src} alt={icon.name} />
-            ))}
-          </div>
-        </div>
+        
 
         {error && <div className="error-msg"><AlertCircle size={20} style={{ display: 'inline', verticalAlign: 'middle' }} /> {error}</div>}
 
@@ -321,18 +391,26 @@ const HomePage = () => {
             {isAnalyzing ? (
               <div className="loader-container">
                 <span className="loader"></span>
-                <p style={{ marginTop: '1rem' }}>SUBS lyzing...</p>
+                <p style={{ marginTop: '1rem' }}>Sublyzing...</p>
               </div>
             ) : (
               <>
                 <div className="drop-icon">📄</div>
-                <p className="dropzone-text">{isDragActive ? "Drop PDF now" : "Upload Bank Statement PDF"}</p>
-                <div className="privacy-pill">Encrypted & RAM-Only</div>
+                <p className="dropzone-text">{isDragActive ? "Drop PDF now" : "Upload Bank/Card Statement PDF/CSV"}</p>
+                <div className="privacy-pill">Safe & Secured </div>
               </>
             )}
           </div>
         )}
       </header>
+
+      <div className="ticker-mask">
+          <div className="ticker-track">
+            {[...SUBSCRIPTION_ICONS, ...SUBSCRIPTION_ICONS].map((icon, i) => (
+              <img key={i} src={icon.src} alt={icon.name} />
+            ))}
+          </div>
+        </div>
 
       {analysisData && (
         <section className="dashboard-layout">
@@ -425,12 +503,12 @@ const HomePage = () => {
           <div className="trust-card">
             <ShieldCheck size={32} color="#00ffa3" style={{ marginBottom: '1rem' }} />
             <h4>RAM-Only Processing</h4>
-            <p>Your files are processed in memory. We never save your data.</p>
+            <p>Your files are processed in your Browser memory. We never save your data.</p>
           </div>
           <div className="trust-card">
             <Zap size={32} color="#00ffa3" style={{ marginBottom: '1rem' }} />
-            <h4>AI Redaction</h4>
-            <p>Our AI strips personal details before analysis.</p>
+            <h4>Redaction First</h4>
+            <p>Our Web strips personal details before analysis.</p>
           </div>
           <div className="trust-card">
             <Trash2 size={32} color="#00ffa3" style={{ marginBottom: '1rem' }} />
