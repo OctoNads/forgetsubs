@@ -190,9 +190,11 @@ ${textForGemini}`
       }
     );
 
-    if (!geminiResponse.ok) {
-      return res.status(500).json({ error: "AI service unavailable" });
-    }
+  if (!geminiResponse.ok) {
+  const errorDetails = await geminiResponse.text();
+  console.error("❌ Google Gemini API Error:", errorDetails);
+  return res.status(500).json({ error: "AI service unavailable. Check server logs." });
+}
 
     const geminiResult = await geminiResponse.json();
     const messageContent = geminiResult.candidates?.[0]?.content?.parts?.[0]?.text || '';

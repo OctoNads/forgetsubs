@@ -18,7 +18,7 @@ import { PrivacyPage, TermsPage } from './LegalPages';
 
 ChartJS.register(ArcElement, Tooltip, Legend);
 
-const API_URL = import.meta.env.VITE_API_URL
+const API_URL = 'http://localhost:5000/api';
 const RECEIVER_WALLET = "0xACe6f654b9cb7d775071e13549277aCd17652EAF";
 const MONAD_CHAIN_ID = 143;
 const USDC_ADDRESSES = {
