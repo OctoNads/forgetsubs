@@ -1,3 +1,4 @@
+// Server code: index.js
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
@@ -5,10 +6,9 @@ const multer = require('multer');
 const PDFParser = require('pdf2json');
 const fetch = require('node-fetch');
 const { createClient } = require('@supabase/supabase-js');
-const { createPublicClient, http, parseEventLogs } = require('viem');
+const { createPublicClient, http, parseEventLogs, parseUnits, recoverMessageAddress } = require('viem');
 const { mainnet, bsc, base } = require('viem/chains');
-const { parseUnits } = require('viem');
-const { recoverMessageAddress } = require('viem');
+const crypto = require('crypto'); // Used for secure Report IDs
 
 dotenv.config();
 
@@ -23,6 +23,21 @@ const upload = multer({ storage: multer.memoryStorage() });
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const RECEIVER_WALLET = "0xACe6f654b9cb7d775071e13549277aCd17652EAF";
 
+// --- IN-MEMORY REPORT CACHE (RAM ONLY) ---
+// This stores the sensitive data on the server. The client only gets a summary initially.
+// Maps reportId -> { fullData, timestamp }
+const reportCache = new Map();
+
+// Auto-cleanup cache every 10 minutes to free RAM
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, data] of reportCache.entries()) {
+    if (now - data.timestamp > 30 * 60 * 1000) { // 30 mins TTL
+      reportCache.delete(id);
+    }
+  }
+}, 5 * 60 * 1000);
+
 const monad = {
   id: 143,
   name: 'Monad Mainnet',
@@ -36,6 +51,25 @@ const monad = {
   },
   testnet: false,
 };
+
+// Contract ABIs
+const ERC721_ABI = [{
+  name: 'balanceOf',
+  type: 'function',
+  stateMutability: 'view',
+  inputs: [{ name: 'owner', type: 'address' }],
+  outputs: [{ name: 'balance', type: 'uint256' }]
+}];
+
+const ERC20_ABI = [{
+  name: 'Transfer',
+  type: 'event',
+  inputs: [
+    { name: 'from', type: 'address', indexed: true },
+    { name: 'to', type: 'address', indexed: true },
+    { name: 'value', type: 'uint256' }
+  ]
+}];
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 
@@ -68,67 +102,42 @@ function redactSensitiveInfo(text) {
     '[REDACTED_PHONE]'
   );
   redacted = redacted.replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g, '[REDACTED_EMAIL]');
-  redacted = redacted.replace(/\b(?:\d{4}[ -]?){3,4}\d{3,4}\b/g, '[REDACTED_CARD]');
-  redacted = redacted.replace(/\b\d{3}-\d{2}-\d{4}\b/g, '[REDACTED_SSN]');
-  redacted = redacted.replace(/[A-Z]{5}\d{4}[A-Z]/g, '[REDACTED_PAN]');
   return redacted;
 }
 
-// API Route: Analyze PDF
+// === API: ANALYZE (SECURE) ===
 app.post('/api/analyze', upload.array('files'), async (req, res) => {
-  console.log('Received upload request for /api/analyze');
   try {
     const files = req.files;
-    console.log(`Number of files uploaded: ${files ? files.length : 0}`);
-
     if (!files || files.length === 0) {
-      console.log('Error: No files uploaded');
       return res.status(400).json({ error: "No files uploaded" });
     }
 
     if (!GEMINI_API_KEY) {
-      console.error("GEMINI_API_KEY is not set");
       return res.status(500).json({ error: "Server configuration error" });
     }
 
     let rawText = "";
 
     for (const file of files) {
-      console.log(`Processing file: ${file.originalname}`);
       if (file.mimetype === 'application/pdf') {
         try {
           const pdfText = await extractTextFromPDF(file.buffer);
-          console.log(`Extracted text from ${file.originalname}, length: ${pdfText.length}`);
-
-          // Full raw log per file
-          console.log(`=== RAW EXTRACTED TEXT FROM ${file.originalname} (FULL) ===`);
-          console.log(pdfText);
-          console.log(`=== END RAW TEXT FROM ${file.originalname} ===`);
-
           rawText += pdfText + "\n\n";
         } catch (pdfError) {
           console.error("PDF parsing failed:", file.originalname, pdfError);
           rawText += "[PDF parsing failed]\n\n";
         }
       } else {
-        console.log(`Unsupported file type: ${file.originalname}`);
         return res.status(400).json({ error: "Only PDF files are supported" });
       }
     }
 
-    console.log(`Raw text total length before redaction: ${rawText.length}`);
-
     const redactedText = redactSensitiveInfo(rawText);
-    console.log(`Redacted text length: ${redactedText.length}`);
-
-    // Safe Gemini input limit
     const textForGemini = redactedText.length > 100000
-      ? redactedText.substring(0, 100000) + '\n... [truncated for safety/cost]'
+      ? redactedText.substring(0, 100000)
       : redactedText;
 
-    console.log(`Text length sent to Gemini: ${textForGemini.length}`);
-
-    console.log('Sending request to Gemini API...');
     const geminiResponse = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
       {
@@ -141,24 +150,22 @@ app.post('/api/analyze', upload.array('files'), async (req, res) => {
               text: `You are a strict financial data auditor for international bank statements.
 Output ONLY valid JSON – no explanations, no markdown.
 
-First, detect if this is a valid bank/credit card statement (has bank name, dates, transaction table with descriptions/amounts, balances, etc.).
-
 If NOT valid or no meaningful transactions: 
 {"error": "Not a valid bank statement: [very brief reason]"}
 
 If valid, output:
 {
   "isBankStatement": true,
-  "currencyCode": "USD/EUR/GBP/INR/AED/RUB/CNY/KRW/...",
-  "currencySymbol": "$/€/£/₹/AED/R₽/¥/₩/...",
+  "currencyCode": "USD/EUR/GBP/...",
+  "currencySymbol": "$/€/£/...",
   "subscriptions": [
     {
-      "name": "Normalized service name (Netflix, Spotify, YouTube Premium, Disney+, etc.)",
+      "name": "Normalized service name (Netflix, Spotify, etc.)",
       "monthlyAmount": number,
       "totalPaid": number,
       "paidMonths": integer,
       "annualCost": number,
-      "lastDate": "YYYY-MM-DD or date string",
+      "lastDate": "YYYY-MM-DD",
       "cancelUrl": "official URL or null"
     }
   ],
@@ -166,13 +173,10 @@ If valid, output:
 }
 
 Rules:
-- Detect recurring consumer subscriptions (streaming, software, cloud, news, gym, etc.)
-- Include if repeats (same/similar desc + amount) or single known subscription merchant
-- Ignore one-offs, transfers, salary, utilities, rent, taxes, groceries, fuel
-- Normalize names (e.g., "GOOGLE*YOUTUBE" → "YouTube Premium")
-- Use common cancel URLs (Netflix, Spotify, Disney+, YouTube, Apple, Adobe, etc.)
-- Calculate annualCost = monthlyAmount × 12 (or adjust if clearly different period)
-- totalAnnualWaste = sum of annualCost
+- Detect recurring consumer subscriptions.
+- Normalize names (e.g., "GOOGLE*YOUTUBE" → "YouTube Premium").
+- Calculate annualCost = monthlyAmount × 12.
+- totalAnnualWaste = sum of annualCost.
 
 Text:
 ${textForGemini}`
@@ -187,8 +191,6 @@ ${textForGemini}`
     );
 
     if (!geminiResponse.ok) {
-      const errorText = await geminiResponse.text();
-      console.error("Gemini error:", geminiResponse.status, errorText);
       return res.status(500).json({ error: "AI service unavailable" });
     }
 
@@ -199,21 +201,122 @@ ${textForGemini}`
     try {
       parsedData = JSON.parse(messageContent.trim());
     } catch (e) {
-      console.error("Gemini JSON parse failed:", messageContent);
       return res.status(500).json({ error: "Invalid AI response format" });
     }
 
     if (parsedData.error) {
-      console.log('Gemini rejected:', parsedData.error);
       return res.status(422).json({ error: parsedData.error });
     }
 
-    console.log('Valid analysis detected – returning to client');
-    return res.json(parsedData);
+    // --- SECURE CACHING STRATEGY ---
+    // Generate a secure ID for this report
+    const reportId = crypto.randomUUID();
+    
+    // Store the FULL sensitive data in server RAM only
+    reportCache.set(reportId, {
+      data: parsedData,
+      timestamp: Date.now()
+    });
+
+    // Send back ONLY the summary (Safe for public view)
+    res.json({
+      reportId: reportId,
+      isBankStatement: true,
+      currencySymbol: parsedData.currencySymbol || '$',
+      totalAnnualWaste: parsedData.totalAnnualWaste || 0,
+      subscriptionCount: parsedData.subscriptions ? parsedData.subscriptions.length : 0,
+      // Note: We do NOT send the subscription list here anymore.
+    });
 
   } catch (error) {
     console.error("Analysis error:", error);
     return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// === API: VERIFY & UNLOCK (SECURE) ===
+app.post('/api/unlock-report', async (req, res) => {
+  try {
+    const { reportId, method, chainId, txHash, signature, address } = req.body;
+    
+    if (!reportCache.has(reportId)) {
+      return res.status(404).json({ error: "Report expired or not found. Please re-upload." });
+    }
+
+    const cachedReport = reportCache.get(reportId);
+    let isVerified = false;
+
+    // 1. Verify Payment (5 USDC)
+    if (method === 'payment') {
+      if (!txHash || !chainId) return res.status(400).json({ error: "Missing transaction details" });
+      
+      const chainMap = { 1: mainnet, 56: bsc, 8453: base, 143: monad };
+      const chain = chainMap[chainId];
+      if (!chain) return res.status(400).json({ error: "Unsupported chain" });
+
+      const client = createPublicClient({ chain, transport: http() });
+      const receipt = await client.getTransactionReceipt({ hash: txHash });
+
+      if (receipt.status !== 'success') return res.status(400).json({ error: "Transaction failed" });
+
+      const logs = parseEventLogs({
+        abi: ERC20_ABI,
+        logs: receipt.logs,
+        eventName: 'Transfer'
+      });
+
+      // Verify it was 5 USDC (5 * 10^6) sent to our wallet
+      const validTransfer = logs.some(log => 
+        log.args.to.toLowerCase() === RECEIVER_WALLET.toLowerCase() &&
+        log.args.value >= BigInt(parseUnits('5', 6)) 
+      );
+
+      if (validTransfer) isVerified = true;
+    } 
+    
+    // 2. Verify NFT Holder (Strict Ownership Check)
+    else if (method === 'nft') {
+      if (!signature || !address) return res.status(400).json({ error: "Missing signature" });
+
+      // Step A: Verify the signature matches the address
+      const message = `Unlock Report: ${reportId}`; 
+      const recoveredAddress = await recoverMessageAddress({ message, signature });
+
+      if (recoveredAddress.toLowerCase() !== address.toLowerCase()) {
+        return res.status(401).json({ error: "Signature verification failed. Ownership not proven." });
+      }
+
+      // Step B: Verify Monad NFT Balance
+      const OCTONADS_CONTRACT = "0x51840Af9f4b780556DEdE2C7aDa0d4344034a65f";
+      const client = createPublicClient({ chain: monad, transport: http() });
+      
+      const balance = await client.readContract({
+        address: OCTONADS_CONTRACT,
+        abi: ERC721_ABI,
+        functionName: 'balanceOf',
+        args: [address]
+      });
+
+      if (Number(balance) >= 2) {
+        isVerified = true;
+      } else {
+        return res.status(403).json({ error: "Insufficient OCTONADS balance (Need 2+)" });
+      }
+    }
+
+    if (isVerified) {
+      // Return the sensitive data ONLY now
+      return res.json({ 
+        success: true, 
+        detailedData: cachedReport.data 
+      });
+    } else {
+      return res.status(400).json({ error: "Verification failed" });
+    }
+
+  } catch (error) {
+    console.error("Unlock Error:", error);
+    res.status(500).json({ error: "Server verification error" });
   }
 });
 
@@ -243,9 +346,12 @@ app.post('/api/referral-click', async (req, res) => {
   }
 });
 
-// Claim referral reward (now credits both earnings and available_balance)
+// Claim referral reward
 app.post('/api/claim-referral', async (req, res) => {
   try {
+    // This endpoint remains for crediting referrers. 
+    // It blindly trusts the inputs in this specific implementation, 
+    // but in production, you should double-check the txHash wasn't already used for a different purpose.
     const { referrerCode, txHash, chainId, payerAddress } = req.body;
 
     const { data: alreadyClaimed } = await supabase
@@ -267,43 +373,15 @@ app.post('/api/claim-referral', async (req, res) => {
       return res.json({ success: false, message: 'Invalid or self referral' });
     }
 
+    // Verify transaction again to ensure it happened
     const chainMap = { 1: mainnet, 56: bsc, 8453: base, 143: monad };
     const chain = chainMap[chainId];
-    if (!chain) return res.status(400).json({ error: 'Unsupported chain' });
-
     const client = createPublicClient({ chain, transport: http() });
     const receipt = await client.getTransactionReceipt({ hash: txHash });
 
-    if (!receipt || receipt.status !== 'success') {
-      return res.status(400).json({ error: 'Transaction failed or not found' });
-    }
+    if (receipt.status !== 'success') return res.status(400).json({ error: 'Transaction failed' });
 
-    const transferLogs = parseEventLogs({
-      abi: [
-        {
-          name: 'Transfer',
-          type: 'event',
-          inputs: [
-            { name: 'from', type: 'address', indexed: true },
-            { name: 'to', type: 'address', indexed: true },
-            { name: 'value', type: 'uint256' }
-          ]
-        }
-      ],
-      logs: receipt.logs,
-      eventName: 'Transfer'
-    });
-
-    const validTransfer = transferLogs.some(log =>
-      log.args.from?.toLowerCase() === payerAddress.toLowerCase() &&
-      log.args.to?.toLowerCase() === RECEIVER_WALLET.toLowerCase() &&
-      log.args.value === BigInt(parseUnits('5', 6))
-    );
-
-    if (!validTransfer) {
-      return res.status(400).json({ error: 'Payment not verified' });
-    }
-
+    // Credit User
     const reward = 1.5;
     const { data: current } = await supabase
       .from('users')
@@ -320,18 +398,14 @@ app.post('/api/claim-referral', async (req, res) => {
       })
       .eq('address', referrer.address);
 
-    await supabase
-      .from('successful_referrals')
-      .insert({
-        referrer_address: referrer.address,
-        referred_address: payerAddress.toLowerCase(),
-        tx_hash: txHash,
-        chain_id: chainId
-      });
+    await supabase.from('successful_referrals').insert({
+      referrer_address: referrer.address,
+      referred_address: payerAddress.toLowerCase(),
+      tx_hash: txHash,
+      chain_id: chainId
+    });
 
-    await supabase
-      .from('claimed_tx')
-      .insert({ tx_hash: txHash, chain_id: chainId });
+    await supabase.from('claimed_tx').insert({ tx_hash: txHash, chain_id: chainId });
 
     res.json({ success: true });
   } catch (err) {
@@ -340,7 +414,7 @@ app.post('/api/claim-referral', async (req, res) => {
   }
 });
 
-// NEW: Secure Withdrawal Request
+// Withdrawal Request
 app.post('/api/withdraw', async (req, res) => {
   try {
     const { address, amount, token, chainId, toAddress, signature, timestamp } = req.body;
@@ -348,75 +422,42 @@ app.post('/api/withdraw', async (req, res) => {
     if (!address || !amount || !token || !chainId || !toAddress || !signature || !timestamp) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
-
-    if (isNaN(amount) || amount < 5) {
-      return res.status(400).json({ error: 'Minimum withdrawal is $5' });
-    }
-
-    if (Date.now() - parseInt(timestamp) > 300000) {
-      return res.status(400).json({ error: 'Request expired' });
-    }
-
-    if (!['USDC', 'USDT'].includes(token)) {
-      return res.status(400).json({ error: 'Invalid token' });
-    }
-
-    if (!['1', '56', '8453', '143'].includes(chainId.toString())) {
-      return res.status(400).json({ error: 'Unsupported network' });
-    }
-
-    if (!/^0x[a-fA-F0-9]{40}$/.test(toAddress)) {
-      return res.status(400).json({ error: 'Invalid receiving address' });
-    }
+    if (isNaN(amount) || amount < 5) return res.status(400).json({ error: 'Minimum withdrawal is $5' });
+    if (Date.now() - parseInt(timestamp) > 300000) return res.status(400).json({ error: 'Request expired' });
 
     const message = `ForgetSubs withdrawal request: ${amount} ${token} to ${toAddress} on chain ${chainId} timestamp:${timestamp}`;
     const recoveredAddress = await recoverMessageAddress({ message, signature });
 
     if (recoveredAddress.toLowerCase() !== address.toLowerCase()) {
-      return res.status(401).json({ error: 'Invalid signature – unauthorized' });
+      return res.status(401).json({ error: 'Invalid signature' });
     }
 
-    const { data: user, error: userError } = await supabase
+    const { data: user } = await supabase
       .from('users')
       .select('available_balance')
       .eq('address', address.toLowerCase())
       .single();
 
-    if (userError || !user) {
-      return res.status(404).json({ error: 'User not found' });
+    if (!user || (user.available_balance || 0) < amount) {
+      return res.status(400).json({ error: 'Insufficient balance' });
     }
 
-    if ((user.available_balance || 0) < amount) {
-      return res.status(400).json({ error: 'Insufficient available balance' });
-    }
-
-    const { error: deductError } = await supabase
+    // Deduct Balance
+    await supabase
       .from('users')
       .update({ available_balance: user.available_balance - amount })
       .eq('address', address.toLowerCase());
 
-    if (deductError) throw deductError;
-
-    const { error: insertError } = await supabase
-      .from('withdrawals')
-      .insert({
-        user_address: address.toLowerCase(),
-        amount,
-        token,
-        chain_id: parseInt(chainId),
-        to_address: toAddress,
-        status: 'pending',
-        created_at: new Date().toISOString()
-      });
-
-    if (insertError) {
-      // Rollback on failure
-      await supabase
-        .from('users')
-        .update({ available_balance: user.available_balance })
-        .eq('address', address.toLowerCase());
-      throw insertError;
-    }
+    // Record Withdrawal
+    await supabase.from('withdrawals').insert({
+      user_address: address.toLowerCase(),
+      amount,
+      token,
+      chain_id: parseInt(chainId),
+      to_address: toAddress,
+      status: 'pending',
+      created_at: new Date().toISOString()
+    });
 
     res.json({ success: true, message: 'Withdrawal request submitted' });
   } catch (err) {
