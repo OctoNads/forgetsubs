@@ -18,20 +18,24 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // ==================== SECURITY MIDDLEWARE ====================
-
 app.use(helmet()); // Security headers
+
+// Parse JSON bodies FIRST (before any other middleware)
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // CORS configuration for production and development
 const allowedOrigins = [
-  process.env.FRONTEND_URL,
-  'https://forgetsubs.com',
-  'https://www.forgetsubs.com',
-  'http://localhost:5173',
-  'http://localhost:3000',
-].filter(Boolean);
+  process.env.FRONTEND_URL,           // From environment variable
+  'https://forgetsubs.com',            // Production domain
+  'https://www.forgetsubs.com',        // WWW subdomain (if applicable)
+  'http://localhost:5173',             // Local development
+  'http://localhost:3000',             // Alternative local port
+].filter(Boolean); // Remove any undefined values
 
 app.use(cors({
   origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl)
     if (!origin) return callback(null, true);
     
     if (allowedOrigins.indexOf(origin) !== -1) {
@@ -47,16 +51,13 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// Parse JSON bodies BEFORE routes
-app.use(express.json({ limit: '10mb' }));
-
 // Handle CORS preflight requests
 app.options('*', cors());
 
 // Rate limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
   message: 'Too many requests from this IP, please try again later.'
 });
 app.use(limiter);
