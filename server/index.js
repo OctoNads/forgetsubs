@@ -18,10 +18,13 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // ==================== SECURITY MIDDLEWARE ====================
+
 app.use(helmet()); // Security headers
+
+// CORS configuration for production and development
 const allowedOrigins = [
   process.env.FRONTEND_URL,
-  'https://forgetsubs.com',      // Your production domain!
+  'https://forgetsubs.com',
   'https://www.forgetsubs.com',
   'http://localhost:5173',
   'http://localhost:3000',
@@ -30,6 +33,7 @@ const allowedOrigins = [
 app.use(cors({
   origin: function (origin, callback) {
     if (!origin) return callback(null, true);
+    
     if (allowedOrigins.indexOf(origin) !== -1) {
       console.log('✅ CORS allowed:', origin);
       callback(null, true);
@@ -43,10 +47,16 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
+// Parse JSON bodies BEFORE routes
+app.use(express.json({ limit: '10mb' }));
+
+// Handle CORS preflight requests
+app.options('*', cors());
+
 // Rate limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
+  windowMs: 15 * 60 * 1000,
+  max: 100,
   message: 'Too many requests from this IP, please try again later.'
 });
 app.use(limiter);
