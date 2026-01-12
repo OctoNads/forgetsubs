@@ -16,6 +16,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const VERSION = '2.0.1-bodyparser-fix'; // Version stamp to verify deployment
 
 // ==================== SECURITY MIDDLEWARE ====================
 app.use(helmet()); // Security headers
@@ -223,9 +224,11 @@ function isValidEthereumAddress(address) {
 // ==================== API: HEALTH CHECK ====================
 app.get('/health', (req, res) => {
   res.json({ 
-    status: 'ok', 
+    status: 'ok',
+    version: VERSION,
     timestamp: new Date().toISOString(),
-    cacheSize: reportCache.size
+    cacheSize: reportCache.size,
+    bodyParserEnabled: true
   });
 });
 
@@ -234,9 +237,24 @@ app.get('/health', (req, res) => {
 // The client extracts PDF and redacts PII before sending
 app.post('/api/analyze-text', async (req, res) => {
   try {
+    // DEBUGGING: Log request details
+    console.log('🔍 Request Headers:', req.headers['content-type']);
+    console.log('🔍 Body exists:', !!req.body);
+    console.log('🔍 Body keys:', req.body ? Object.keys(req.body) : 'NO BODY');
+    console.log('🔍 Raw body type:', typeof req.body);
+    
+    // Check if body was parsed
+    if (!req.body) {
+      console.error('❌ req.body is undefined - body parser not working!');
+      return res.status(400).json({ 
+        error: "Request body is missing. Please ensure Content-Type is application/json" 
+      });
+    }
+    
     const { text } = req.body;
     
     if (!text || typeof text !== 'string') {
+      console.log('❌ No text in body. Body content:', JSON.stringify(req.body).substring(0, 200));
       return res.status(400).json({ error: "No text provided" });
     }
 
@@ -1001,10 +1019,13 @@ app.listen(PORT, () => {
 ╔═══════════════════════════════════════════════╗
 ║   🚀 FORGETSUBS API SERVER RUNNING           ║
 ║   📡 Port: ${PORT}                              ║
+║   📦 Version: ${VERSION}                      ║
 ║   🔒 Security: Enabled                        ║
 ║   ⚡ Cache: ${reportCache.size} reports                      ║
 ╚═══════════════════════════════════════════════╝
   `);
+  console.log('✅ Body parser: express.json() ENABLED');
+  console.log('✅ CORS: Multi-origin support ENABLED');
 });
 
 // Graceful shutdown
