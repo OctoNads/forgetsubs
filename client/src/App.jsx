@@ -1,9 +1,10 @@
-// App.jsx
+// App.jsx - Hybrid Privacy Approach (Best of Both Worlds)
 import React, { useState, useEffect } from 'react';
 import { useDropzone } from 'react-dropzone';
 import {
   Lock, CheckCircle2, Coins, Gem,
-  ArrowRight, Wallet, ExternalLink, AlertCircle, Users, ChevronDown
+  ArrowRight, Wallet, ExternalLink, AlertCircle, Users, ChevronDown,
+  ShieldCheck, Zap, Trash2
 } from 'lucide-react';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend } from 'chart.js';
 import { Pie } from 'react-chartjs-2';
@@ -11,16 +12,23 @@ import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount, useWriteContract, usePublicClient, useSignMessage } from 'wagmi';
 import { parseUnits, erc20Abi } from 'viem';
 import { Routes, Route, useSearchParams, Link, useLocation } from 'react-router-dom';
+import toast, { Toaster } from 'react-hot-toast';
+import * as pdfjsLib from 'pdfjs-dist';
 
 import './App.css';
 import ReferPage from './ReferPage';
 import { PrivacyPage, TermsPage } from './LegalPages';
+import ErrorBoundary from './ErrorBoundary';
 
 ChartJS.register(ArcElement, Tooltip, Legend);
 
-const API_URL = 'http://localhost:5000/api';
-const RECEIVER_WALLET = "0xACe6f654b9cb7d775071e13549277aCd17652EAF";
-const MONAD_CHAIN_ID = 143;
+// Configure PDF.js
+pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+
+// ==================== CONFIG ====================
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const RECEIVER_WALLET = import.meta.env.VITE_RECEIVER_WALLET || "0xACe6f654b9cb7d775071e13549277aCd17652EAF";
+
 const USDC_ADDRESSES = {
   143: "0x754704Bc059F8C67012fEd69BC8A327a5aafb603",
   56: "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
@@ -28,30 +36,82 @@ const USDC_ADDRESSES = {
   1: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
 };
 
+const MAX_FILE_SIZE = 10 * 1024 * 1024;
+const ALLOWED_FILE_TYPES = ['application/pdf'];
+
+// ==================== CLIENT-SIDE PDF PROCESSING ====================
+const extractTextFromPDF = async (file) => {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  let fullText = '';
+
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const textContent = await page.getTextContent();
+    const pageText = textContent.items.map(item => item.str).join(' ');
+    fullText += pageText + '\n';
+  }
+
+  return fullText;
+};
+
+// ==================== CLIENT-SIDE PII REDACTION ====================
+const redactSensitiveInfo = (text) => {
+  let redacted = text;
+  
+  // Redact account numbers (multiple patterns)
+  redacted = redacted.replace(/\b(?:\d{4}[ -]?){2,5}\d{4}\b/g, '[ACCOUNT]');
+  redacted = redacted.replace(/\b\d{8,20}\b/g, '[ACCOUNT]');
+  
+  // Redact names with common prefixes
+  const namePrefixes = 'Account Holder|Customer Name|Name|Holder|Client|Dear|Welcome|To|From';
+  redacted = redacted.replace(
+    new RegExp(`(${namePrefixes})\\s*[:\\s=]+[A-Za-zÀ-ÿ\\s'-]{3,40}`, 'gi'),
+    '$1: [REDACTED]'
+  );
+  
+  // Redact addresses
+  const addrKeywords = 'Address|Residence|Home Address|Mailing Address|Billing Address';
+  redacted = redacted.replace(
+    new RegExp(`(${addrKeywords})\\s*[:\\s=]+[^\\n\\r]{10,120}`, 'gi'),
+    '$1: [REDACTED]'
+  );
+  
+  // Redact phone numbers
+  redacted = redacted.replace(
+    /(\+?\d{1,4}[-.\s]?)?(\(?\d{2,5}\)?[-.\s]?\d{3,5}[-.\s]?\d{3,6})/g,
+    '[PHONE]'
+  );
+  
+  // Redact emails
+  redacted = redacted.replace(
+    /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g,
+    '[EMAIL]'
+  );
+  
+  // Redact SSN/SIN patterns
+  redacted = redacted.replace(/\b\d{3}-\d{2}-\d{4}\b/g, '[SSN]');
+  redacted = redacted.replace(/\b\d{9}\b/g, '[ID]');
+  
+  return redacted;
+};
+
+// ==================== SUBSCRIPTION ICONS ====================
 const SUBSCRIPTION_ICONS = [
   { name: "Netflix", src: "https://upload.wikimedia.org/wikipedia/commons/0/08/Netflix_2015_logo.svg" },
   { name: "Spotify", src: "https://upload.wikimedia.org/wikipedia/commons/1/19/Spotify_logo_without_text.svg" },
   { name: "Disney+", src: "https://upload.wikimedia.org/wikipedia/commons/3/3e/Disney%2B_logo.svg" },
   { name: "Amazon Prime", src: "https://upload.wikimedia.org/wikipedia/commons/1/11/Amazon_Prime_Video_logo.svg" },
   { name: "Adobe", src: "https://www.clipartmax.com/png/middle/207-2078951_logo-adobe-creative-cloud-logo-png.png" },
-  { name: "Hulu", src: "https://download.logo.wine/logo/Hulu/Hulu-Logo.wine.png" },
-  { name: "Audible", src: "https://cdn.freebiesupply.com/logos/thumbs/2x/audible-logo.png" },
-  { name: "Discord", src: "https://pngimg.com/d/discord_PNG11.png" },
-  { name: "Google One", src: "https://cdn.freebiesupply.com/logos/thumbs/2x/google-1-logo.png" },
-  { name: "NordVPN", src: "https://1000logos.net/wp-content/uploads/2022/08/NordVPN-Emblem.png" },
-  { name: "Paramount+", src: "https://www.pngall.com/wp-content/uploads/15/Paramount-Plus-Logo-No-Background.png" },
-  { name: "SoundCloud", src: "https://www.nicepng.com/png/detail/18-183578_soundcloud-logo.png" },
-  { name: "Canva", src: "https://1000logos.net/wp-content/uploads/2023/02/Canva-Logo-2013.png" },
   { name: "YouTube Premium", src: "https://upload.wikimedia.org/wikipedia/commons/d/dd/YouTube_Premium_logo.svg" },
-  { name: "Max (HBO)", src: "https://upload.wikimedia.org/wikipedia/commons/c/ce/Max_logo.svg" },
-  { name: "Twitch", src: "https://upload.wikimedia.org/wikipedia/commons/d/d3/Twitch_Glitch_Logo_Purple.svg" },
   { name: "Apple TV+", src: "https://upload.wikimedia.org/wikipedia/commons/2/28/Apple_TV_Plus_Logo.svg" },
   { name: "Microsoft 365", src: "https://upload.wikimedia.org/wikipedia/commons/4/44/Microsoft_logo.svg" },
-  { name: "ChatGPT", src: "https://upload.wikimedia.org/wikipedia/commons/0/04/ChatGPT_logo.svg", style: { filter: "invert(1)" } }
 ];
 
+// ==================== VERIFICATION MODAL ====================
 const VerificationModal = ({ isOpen, status, error, onClose }) => {
   if (!isOpen) return null;
+
   return (
     <div className="modal-overlay">
       <div className="modal-content glass-panel center-text" style={{ maxWidth: '350px' }}>
@@ -81,7 +141,21 @@ const VerificationModal = ({ isOpen, status, error, onClose }) => {
             <div className="error-icon-anim"><AlertCircle size={64} color="#ff6b6b" /></div>
             <h3>Failed</h3>
             <p className="modal-desc red">{error || "Something went wrong"}</p>
-            <button className="modal-btn" style={{ marginTop: '1rem', background: 'var(--card-bg)', border: '1px solid white', padding: '0.5rem 1rem', borderRadius: '8px', color: 'white', cursor: 'pointer' }} onClick={onClose}>Close</button>
+            <button 
+              className="modal-btn" 
+              style={{ 
+                marginTop: '1rem', 
+                background: 'var(--card-bg)', 
+                border: '1px solid white', 
+                padding: '0.5rem 1rem', 
+                borderRadius: '8px', 
+                color: 'white', 
+                cursor: 'pointer' 
+              }} 
+              onClick={onClose}
+            >
+              Close
+            </button>
           </>
         )}
       </div>
@@ -89,13 +163,10 @@ const VerificationModal = ({ isOpen, status, error, onClose }) => {
   );
 };
 
+// ==================== NAVBAR ====================
 const Navbar = () => (
   <nav className="navbar-modern">
-    <Link 
-      to="/" 
-      className="logo" 
-      style={{ display: 'flex', alignItems: 'center', gap: '1px' }}
-    >
+    <Link to="/" className="logo" style={{ display: 'flex', alignItems: 'center', gap: '1px' }}>
       <img 
         src="https://violet-obliged-whippet-350.mypinata.cloud/ipfs/bafybeihrzxwujwj4mzhztap2e7kd6hzt6agmdzme5cq572mg5iewv6qoly/forget_subs_logo-removebg-preview%20zoom.png" 
         alt="ForgetSubs Logo" 
@@ -117,13 +188,14 @@ const Navbar = () => (
   </nav>
 );
 
+// ==================== FOOTER ====================
 const Footer = () => (
   <footer className="footer-modern">
     <div className="footer-content">
       <div className="footer-brand">
         <Link to="/" className="logo">FORGET<span>SUBS</span></Link>
         <p style={{ marginTop: '1rem' }}>
-          The AI-powered subscription killer. Securely analyze bank statements and stop the money leak instantly.
+          Privacy-first subscription analyzer. Your file is processed locally, only redacted text touches our servers.
         </p>
       </div>
       <div className="footer-col">
@@ -131,7 +203,7 @@ const Footer = () => (
         <div className="footer-links">
           <Link to="/" className="footer-link">Home</Link>
           <Link to="/refer" className="footer-link">Refer & Earn</Link>
-          <a href="https://x.com/OctoNads" className="footer-link">Twitter</a>
+          <a href="https://x.com/OctoNads" className="footer-link" target="_blank" rel="noopener noreferrer">Twitter</a>
         </div>
       </div>
       <div className="footer-col">
@@ -139,27 +211,29 @@ const Footer = () => (
         <div className="footer-links">
           <Link to="/privacy" className="footer-link">Privacy Policy</Link>
           <Link to="/terms" className="footer-link">Terms of Service</Link>
-          <Link to="https://forms.gle/1kKv79XCea5xKmgC8" className="footer-link">Contact Us</Link>
+          <a href="https://forms.gle/1kKv79XCea5xKmgC8" className="footer-link" target="_blank" rel="noopener noreferrer">Contact Us</a>
         </div>
       </div>
     </div>
     <div className="footer-bottom">
       <div>© 2026 FORGETSUBS. All rights reserved.</div>
       <div style={{ display: 'flex', gap: '1rem' }}>
-        <span>Secure.</span>
+        <span>Client-First.</span>
         <span>Private.</span>
-        <span>Encrypted.</span>
+        <span>Secure.</span>
       </div>
     </div>
   </footer>
 );
+
+// ==================== FAQ SECTION ====================
 const FaqSection = () => {
   const [openIndex, setOpenIndex] = useState(null);
   const faqs = [
-    { q: "Is my data really safe?", a: "Yes. We use a 'RAM-Only' processing model. Your PDF is uploaded to server memory, analyzed by AI with personal data redacted, and then immediately destroyed." },
-    { q: "How does the Refer & Earn work?", a: "Grab your unique link from the Referral page. Share it. When friends unlock their report, you earn 1.5 USDC instantly." },
-    { q: "Which blockchains do you support?", a: "We support USDC payments on Monad Mainnet, BNB Smart Chain (BSC), Base, and Ethereum." },
-    { q: "Can I use this for free?", a: "You get a free summary immediately. The detailed report requires a small 5 USDC fee, or it's free if you hold 2+ OCTONADS NFTs." }
+    { q: "Is my data really safe?", a: "YES! Your PDF is processed in your browser. We extract and redact locally, then send only the redacted text to our server for AI analysis. Your original file never leaves your device." },
+    { q: "What data reaches your server?", a: "Only redacted transaction text with all personal info (names, account numbers, addresses) removed. The server analyzes this anonymized text and immediately purges it after sending results." },
+    { q: "How does the Refer & Earn work?", a: "Share your unique link. When friends unlock their report, you earn 1.5 USDC instantly." },
+    { q: "Which blockchains do you support?", a: "We support USDC payments on Monad Mainnet, BNB Smart Chain (BSC), Base, and Ethereum." }
   ];
 
   return (
@@ -172,7 +246,7 @@ const FaqSection = () => {
               {faq.q}
               <ChevronDown className="faq-icon" size={20} />
             </div>
-            <div className="faq-answer"><p>{faq.a}</p></div>
+            {openIndex === i && <div className="faq-answer">{faq.a}</div>}
           </div>
         ))}
       </div>
@@ -180,169 +254,282 @@ const FaqSection = () => {
   );
 };
 
+// ==================== HOME PAGE ====================
 const HomePage = () => {
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [error, setError] = useState(null);
-
-  // Split State: Summary (Public) vs Detailed (Private)
-  const [summaryData, setSummaryData] = useState(null);
-  const [detailedReport, setDetailedReport] = useState(null);
-
-  const [verifyStatus, setVerifyStatus] = useState('idle');
-  const [verifyError, setVerifyError] = useState(null);
-
   const { address, isConnected, chain } = useAccount();
   const { writeContractAsync } = useWriteContract();
-  const { signMessageAsync } = useSignMessage();
   const publicClient = usePublicClient();
+  const { signMessageAsync } = useSignMessage();
 
+  const [summaryData, setSummaryData] = useState(null);
+  const [detailedReport, setDetailedReport] = useState(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [verifyStatus, setVerifyStatus] = useState('idle');
+  const [verifyError, setVerifyError] = useState('');
+  const [reportId, setReportId] = useState(null);
+
+  const validateFile = (file) => {
+    if (!ALLOWED_FILE_TYPES.includes(file.type)) {
+      toast.error('Only PDF files are supported');
+      return false;
+    }
+    if (file.size > MAX_FILE_SIZE) {
+      toast.error(`File size must be less than ${MAX_FILE_SIZE / 1024 / 1024}MB`);
+      return false;
+    }
+    return true;
+  };
+
+  // ==================== HYBRID PROCESSING ====================
   const onDrop = async (acceptedFiles) => {
     if (acceptedFiles.length === 0) return;
+
+    const file = acceptedFiles[0];
+    if (!validateFile(file)) return;
+
     setIsAnalyzing(true);
-    setError(null);
     setSummaryData(null);
     setDetailedReport(null);
-
-    const formData = new FormData();
-    acceptedFiles.forEach(file => formData.append('files', file));
+    setReportId(null);
 
     try {
-      // 1. Send file, get ONLY summary + reportId
-      const response = await fetch(`${API_URL}/analyze`, { method: 'POST', body: formData });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || "Failed");
+      // STEP 1: Extract text in browser (file never uploaded!)
+      toast.loading('📄 Extracting text locally...', { id: 'extract' });
+      const rawText = await extractTextFromPDF(file);
+      toast.dismiss('extract');
 
-      setSummaryData(result); // Contains reportId, totalAnnualWaste, subscriptionCount
-    } catch (err) {
-      setError(err.message);
+      if (rawText.length < 100) {
+        throw new Error('PDF appears to be empty or unreadable');
+      }
+
+      // STEP 2: Redact PII in browser (privacy protection!)
+      toast.loading('🔒 Redacting personal info...', { id: 'redact' });
+      const redactedText = redactSensitiveInfo(rawText);
+      toast.dismiss('redact');
+
+     
+      
+      const response = await fetch(`${API_URL}/analyze-text`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          text: redactedText.substring(0, 200000) // Limit size
+        }),
+      });
+
+      toast.dismiss('analyze');
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Analysis failed');
+      }
+
+      const data = await response.json();
+      
+      if (!data.isBankStatement) {
+        toast.error(data.error || 'Invalid bank statement');
+        return;
+      }
+
+      setSummaryData(data);
+      setReportId(data.reportId);
+      toast.success(`Found ${data.subscriptionCount} subscriptions!`);
+
+    } catch (error) {
+      console.error('Analysis error:', error);
+      toast.error(error.message || 'Failed to analyze file. Please try again.');
     } finally {
       setIsAnalyzing(false);
     }
   };
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop, accept: { 'application/pdf': ['.pdf'] }, multiple: false
+    onDrop,
+    accept: { 'application/pdf': ['.pdf'] },
+    multiple: false,
+    disabled: isAnalyzing
   });
 
-  // --- UNLOCK HANDLERS ---
+  // ==================== PAYMENT UNLOCK ====================
   const handlePayUnlock = async () => {
-    if (!isConnected || !address || !chain || !USDC_ADDRESSES[chain.id]) {
-      alert("Connect wallet / unsupported network");
+    if (!isConnected) {
+      toast.error('Please connect your wallet first');
       return;
     }
+
+    if (!reportId) {
+      toast.error('No report to unlock');
+      return;
+    }
+
+    setVerifyStatus('processing');
+    setVerifyError('');
+
     try {
-      setVerifyStatus('processing');
-      // 1. Execute Payment on Blockchain
-      const hash = await writeContractAsync({
-        address: USDC_ADDRESSES[chain.id],
+      const chainId = chain?.id;
+      if (!chainId || !USDC_ADDRESSES[chainId]) {
+        toast.error('Please switch to a supported network (Monad, BSC, Base, or Ethereum)');
+        setVerifyStatus('idle');
+        return;
+      }
+
+      const usdcAddress = USDC_ADDRESSES[chainId];
+      const amount = parseUnits('5', 6);
+
+      const txHash = await writeContractAsync({
+        address: usdcAddress,
         abi: erc20Abi,
         functionName: 'transfer',
-        args: [RECEIVER_WALLET, parseUnits('5', 6)],
+        args: [RECEIVER_WALLET, amount],
       });
 
+      toast.loading('Waiting for confirmation...', { id: 'tx-confirm' });
       setVerifyStatus('verifying');
 
-      // Wait for block confirmation
-      await publicClient.waitForTransactionReceipt({ hash });
+      await publicClient.waitForTransactionReceipt({ hash: txHash });
+      toast.dismiss('tx-confirm');
 
-      // 2. Server-Side Verification & Data Fetch
-      const response = await fetch(`${API_URL}/unlock-report`, {
+      const unlockResponse = await fetch(`${API_URL}/unlock-report`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          reportId: summaryData.reportId,
+          reportId,
           method: 'payment',
-          txHash: hash,
-          chainId: chain.id
-        })
+          chainId,
+          txHash,
+        }),
       });
 
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error);
-
-      setDetailedReport(result.detailedData);
-      setVerifyStatus('success');
-      setTimeout(() => setVerifyStatus('idle'), 2000);
-
-      // Trigger Referral Logic
-      const referrerCode = localStorage.getItem('referrer_code');
-      if (referrerCode) {
-        fetch(`${API_URL}/claim-referral`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ referrerCode, txHash: hash, chainId: chain.id, payerAddress: address })
-        }).catch(console.error);
+      if (!unlockResponse.ok) {
+        const errorData = await unlockResponse.json();
+        throw new Error(errorData.error || 'Unlock failed');
       }
 
-    } catch (err) {
-      console.error(err);
+      const unlockData = await unlockResponse.json();
+      setDetailedReport(unlockData.detailedData);
+      setVerifyStatus('success');
+      toast.success('Report unlocked successfully!');
+
+      setTimeout(() => setVerifyStatus('idle'), 2000);
+
+      const referrerCode = localStorage.getItem('referrer_code');
+      if (referrerCode) {
+        try {
+          await fetch(`${API_URL}/claim-referral`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              referrerCode,
+              txHash,
+              chainId,
+              payerAddress: address,
+            }),
+          });
+          localStorage.removeItem('referrer_code');
+        } catch (refErr) {
+          console.error('Referral claim error:', refErr);
+        }
+      }
+    } catch (error) {
+      console.error('Payment unlock error:', error);
       setVerifyStatus('error');
-      setVerifyError(err.message.split('\n')[0]);
+      setVerifyError(error.message || 'Payment failed. Please try again.');
+      toast.error(error.message || 'Payment failed');
     }
   };
 
+  // ==================== NFT UNLOCK ====================
   const handleNftUnlock = async () => {
-    if (!chain || chain.id !== MONAD_CHAIN_ID) return alert("Switch to Monad Network");
-    try {
-      setVerifyStatus('processing');
+    if (!isConnected) {
+      toast.error('Please connect your wallet first');
+      return;
+    }
 
-      // 1. Sign Message to Prove Ownership
-      const message = `Unlock Report: ${summaryData.reportId}`;
+    if (!reportId) {
+      toast.error('No report to unlock');
+      return;
+    }
+
+    setVerifyStatus('processing');
+    setVerifyError('');
+
+    try {
+      const message = `Unlock Report: ${reportId}`;
       const signature = await signMessageAsync({ message });
 
       setVerifyStatus('verifying');
 
-      // 2. Server-Side Verification (Signature + Balance Check) & Data Fetch
-      const response = await fetch(`${API_URL}/unlock-report`, {
+      const unlockResponse = await fetch(`${API_URL}/unlock-report`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          reportId: summaryData.reportId,
+          reportId,
           method: 'nft',
           signature,
-          address
-        })
+          address,
+        }),
       });
 
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error);
+      if (!unlockResponse.ok) {
+        const errorData = await unlockResponse.json();
+        throw new Error(errorData.error || 'Unlock failed');
+      }
 
-      setDetailedReport(result.detailedData);
+      const unlockData = await unlockResponse.json();
+      setDetailedReport(unlockData.detailedData);
       setVerifyStatus('success');
-      setTimeout(() => setVerifyStatus('idle'), 2000);
+      toast.success('Report unlocked with NFT!');
 
-    } catch (err) {
-      console.error(err);
+      setTimeout(() => setVerifyStatus('idle'), 2000);
+    } catch (error) {
+      console.error('NFT unlock error:', error);
       setVerifyStatus('error');
-      setVerifyError(err.message);
+      setVerifyError(error.message || 'NFT verification failed');
+      toast.error(error.message || 'NFT verification failed');
     }
   };
 
-  // --- UI RENDER HELPERS ---
+  // ==================== CHART DATA ====================
   const lockedPieData = {
-    labels: ['Hidden', 'Hidden', 'Hidden'],
-    datasets: [{ data: [30, 40, 30], backgroundColor: ['#333', '#444', '#555'], borderWidth: 0 }]
+    labels: ['Locked'],
+    datasets: [{
+      data: [100],
+      backgroundColor: ['rgba(255, 255, 255, 0.1)'],
+      borderWidth: 0
+    }]
   };
 
   const unlockedPieData = detailedReport ? {
     labels: detailedReport.subscriptions.map(s => s.name),
     datasets: [{
       data: detailedReport.subscriptions.map(s => s.monthlyAmount),
-      backgroundColor: ['#00ffa3', '#60efff', '#ff6b6b', '#ffd93d', '#6c5ce7'],
-      borderWidth: 1,
-      borderColor: '#ffffff'
+      backgroundColor: [
+        '#00ffa3', '#60efff', '#ff6b6b', '#ffd93d', '#a78bfa',
+        '#fb923c', '#ec4899', '#14b8a6', '#f472b6', '#8b5cf6'
+      ],
+      borderWidth: 2,
+      borderColor: '#050505'
     }]
-  } : null;
+  } : lockedPieData;
 
   return (
     <>
-      <VerificationModal isOpen={verifyStatus !== 'idle'} status={verifyStatus} error={verifyError} onClose={() => setVerifyStatus('idle')} />
+      <Toaster position="top-center" />
+      <VerificationModal
+        isOpen={verifyStatus !== 'idle'}
+        status={verifyStatus}
+        error={verifyError}
+        onClose={() => {
+          setVerifyStatus('idle');
+          setVerifyError('');
+        }}
+      />
 
       <header className="hero">
-        <h1>Stop the <span className="gradient-text">Money Leak.</span></h1>
-        <h3>Track Forgotten Subscriptions, Cancel & <span className="gradient-text">Save up to $700/year</span>.</h3>
-
-        {error && <div className="error-msg"><AlertCircle size={20} style={{ display: 'inline', verticalAlign: 'middle' }} /> {error}</div>}
+        <h1>
+          Find Your <span className="gradient-text">Money Leaks</span>
+        </h1>
+         <h3>Track Forgotten Subscriptions, Cancel & <span className="gradient-text">Save up to $700/year</span>.</h3>
 
         {!summaryData && (
           <div {...getRootProps()} className={`dropzone ${isDragActive ? 'active' : ''}`}>
@@ -350,13 +537,15 @@ const HomePage = () => {
             {isAnalyzing ? (
               <div className="loader-container">
                 <span className="loader"></span>
-                <p style={{ marginTop: '1rem' }}>Sublyzing...</p>
+                <p style={{ marginTop: '1rem' }}>Processing...</p>
               </div>
             ) : (
               <>
                 <div className="drop-icon">📄</div>
-                <p className="dropzone-text">{isDragActive ? "Drop PDF now" : "Upload Bank/Card Statement PDF/CSV"}</p>
-                <div className="privacy-pill">Safe & Secured</div>
+                <p className="dropzone-text">
+                  {isDragActive ? "Drop PDF now" : "Upload Bank/Card Statement in Pdf/CSV"}
+                </p>
+                <div className="privacy-pill">🔒 File Stays on Your Device , Local Processing for Security & Privacy</div>
               </>
             )}
           </div>
@@ -377,7 +566,9 @@ const HomePage = () => {
             <div className="stats-column">
               <div className="stat-card">
                 <div className="stat-label">Estimated Annual Waste</div>
-                <div className="stat-value green">{summaryData.currencySymbol}{summaryData.totalAnnualWaste.toFixed(2)}</div>
+                <div className="stat-value green">
+                  {summaryData.currencySymbol}{summaryData.totalAnnualWaste.toFixed(2)}
+                </div>
               </div>
               <div className="stat-card">
                 <div className="stat-label">Active Subscriptions</div>
@@ -449,21 +640,49 @@ const HomePage = () => {
                 <div className="report-header">
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                     <CheckCircle2 color="#00ffa3" />
-                    <div><h3 className="report-title">Full Report</h3><span style={{ fontSize: '0.75rem', color: '#00ffa3' }}>Verified & Unlocked</span></div>
+                    <div>
+                      <h3 className="report-title">Full Report</h3>
+                      <span style={{ fontSize: '0.75rem', color: '#00ffa3' }}>Verified & Unlocked</span>
+                    </div>
                   </div>
                 </div>
                 <div className="table-responsive">
                   <table className="modern-table">
-                    <thead><tr><th>Service</th><th>Monthly</th><th>Paid Total</th><th>Months</th><th>Yearly Cost</th><th>Action</th></tr></thead>
+                    <thead>
+                      <tr>
+                        <th>Service</th>
+                        <th>Monthly Charges</th>
+                        <th>Paid Total</th>
+                        <th>Paid Months</th>
+                        <th>Yearly Cost</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
                     <tbody>
                       {detailedReport.subscriptions.map((sub, idx) => (
                         <tr key={idx}>
-                          <td><div className="service-flex"><div className="service-icon-box">{sub.name.charAt(0)}</div>{sub.name}</div></td>
+                          <td>
+                            <div className="service-flex">
+                              <div className="service-icon-box">{sub.name.charAt(0)}</div>
+                              {sub.name}
+                            </div>
+                          </td>
                           <td>{detailedReport.currencySymbol}{sub.monthlyAmount.toFixed(2)}</td>
                           <td>{detailedReport.currencySymbol}{sub.totalPaid.toFixed(2)}</td>
                           <td>{sub.paidMonths}</td>
-                          <td style={{ color: 'var(--primary)', fontWeight: 'bold' }}>{detailedReport.currencySymbol}{sub.annualCost.toFixed(2)}</td>
-                          <td><a href={sub.cancelUrl || '#'} target="_blank" rel="noreferrer" className="cancel-link">Cancel <ExternalLink size={14} /></a></td>
+                          <td style={{ color: 'var(--primary)', fontWeight: 'bold' }}>
+                            {detailedReport.currencySymbol}{sub.annualCost.toFixed(2)}
+                          </td>
+                          <td>
+                            <a 
+                              href={sub.cancelUrl || '#'} 
+                              target="_blank" 
+                              rel="noopener noreferrer" 
+                              className="cancel-link"
+                            >
+                              Cancel <ExternalLink size={14} />
+                            </a>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -475,12 +694,33 @@ const HomePage = () => {
         </section>
       )}
 
-      <div style={{ marginTop: '4rem' }}><FaqSection /></div>
+      <section className="trust-section">
+        <h2 className="section-title">Privacy-First Architecture</h2>
+        <div className="trust-grid">
+          <div className="trust-card">
+            <ShieldCheck size={32} color="#00ffa3" style={{ marginBottom: '1rem' }} />
+            <h4>Local Processing</h4>
+            <p>Your Statement is extracted and processed entirely in your browser. The file never leaves your device.</p>
+          </div>
+          <div className="trust-card">
+            <Zap size={32} color="#00ffa3" style={{ marginBottom: '1rem' }} />
+            <h4>Client-Side Redaction</h4>
+            <p>All personal info (names, accounts, addresses etc) is stripped in your browser before any data is sent for Analyse.</p>
+          </div>
+          <div className="trust-card">
+            <Trash2 size={32} color="#00ffa3" style={{ marginBottom: '1rem' }} />
+            <h4>Immediate Server Purge</h4>
+            <p>Server receives only redacted text for AI analysis, then immediately deletes it after sending results.</p>
+          </div>
+        </div>
+      </section>
+
+      <FaqSection />
     </>
   );
 };
 
-// --- APP SHELL ---
+// ==================== APP SHELL ====================
 function App() {
   const [searchParams] = useSearchParams();
   const { pathname } = useLocation();
@@ -500,18 +740,20 @@ function App() {
   useEffect(() => { window.scrollTo(0, 0); }, [pathname]);
 
   return (
-    <div className="app-shell">
-      <Navbar />
-      <div className="container">
-        <Routes>
-          <Route path="/" element={<HomePage />} />
-          <Route path="/refer" element={<ReferPage />} />
-          <Route path="/privacy" element={<PrivacyPage />} />
-          <Route path="/terms" element={<TermsPage />} />
-        </Routes>
+    <ErrorBoundary>
+      <div className="app-shell">
+        <Navbar />
+        <div className="container">
+          <Routes>
+            <Route path="/" element={<HomePage />} />
+            <Route path="/refer" element={<ReferPage />} />
+            <Route path="/privacy" element={<PrivacyPage />} />
+            <Route path="/terms" element={<TermsPage />} />
+          </Routes>
+        </div>
+        <Footer />
       </div>
-      <Footer />
-    </div>
+    </ErrorBoundary>
   );
 }
 

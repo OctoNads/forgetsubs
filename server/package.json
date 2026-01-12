@@ -14,9 +14,12 @@
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.2.1",
+    "helmet": "^8.1.0",
     "multer": "^2.0.2",
     "node-fetch": "^2.7.0",
     "pdf2json": "^4.0.1",
+    "pdfjs-dist": "^5.4.530",
     "redact-pii": "^3.4.0",
     "viem": "^2.44.1"
   }
