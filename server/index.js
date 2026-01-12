@@ -19,11 +19,29 @@ const PORT = process.env.PORT || 5000;
 
 // ==================== SECURITY MIDDLEWARE ====================
 app.use(helmet()); // Security headers
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  'https://forgetsubs.com',      // Your production domain!
+  'https://www.forgetsubs.com',
+  'http://localhost:5173',
+  'http://localhost:3000',
+].filter(Boolean);
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
-  credentials: true
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      console.log('✅ CORS allowed:', origin);
+      callback(null, true);
+    } else {
+      console.log('❌ CORS blocked:', origin);
+      callback(new Error(`Origin ${origin} not allowed by CORS`));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
-app.use(express.json({ limit: '10mb' }));
 
 // Rate limiting
 const limiter = rateLimit({
