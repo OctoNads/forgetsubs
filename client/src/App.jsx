@@ -19,6 +19,7 @@ import './App.css';
 import ReferPage from './ReferPage';
 import { PrivacyPage, TermsPage } from './LegalPages';
 import ErrorBoundary from './ErrorBoundary';
+import { supabase } from './supabase';
 
 ChartJS.register(ArcElement, Tooltip, Legend);
 
@@ -134,6 +135,28 @@ const VerificationModal = ({ isOpen, status, error, onClose }) => {
             <div className="success-icon-anim"><CheckCircle2 size={64} color="#00ffa3" /></div>
             <h3>Unlocked!</h3>
             <p className="modal-desc">Access granted successfully.</p>
+          </>
+        )}
+        {status === 'denied' && (
+          <>
+            <div className="error-icon-anim"><AlertCircle size={64} color="#ff6b6b" /></div>
+            <h3>Access Denied</h3>
+            <p className="modal-desc">Transaction cancelled by user.</p>
+            <button 
+              className="modal-btn" 
+              style={{ 
+                marginTop: '1rem', 
+                background: 'var(--card-bg)', 
+                border: '1px solid white', 
+                padding: '0.5rem 1rem', 
+                borderRadius: '8px', 
+                color: 'white', 
+                cursor: 'pointer' 
+              }} 
+              onClick={onClose}
+            >
+              Close
+            </button>
           </>
         )}
         {status === 'error' && (
@@ -267,6 +290,39 @@ const HomePage = () => {
   const [verifyStatus, setVerifyStatus] = useState('idle');
   const [verifyError, setVerifyError] = useState('');
   const [reportId, setReportId] = useState(null);
+  const [hasPaidSubscription, setHasPaidSubscription] = useState(false);
+  const [checkingSubscription, setCheckingSubscription] = useState(false);
+
+  // Check if user has already paid for subscription
+  useEffect(() => {
+    const checkPaidSubscription = async () => {
+      if (!address) {
+        setHasPaidSubscription(false);
+        return;
+      }
+
+      setCheckingSubscription(true);
+      try {
+        const { data, error } = await supabase
+          .from('paid_subscriptions')
+          .select('wallet_address')
+          .eq('wallet_address', address.toLowerCase())
+          .single();
+
+        if (data && !error) {
+          setHasPaidSubscription(true);
+        } else {
+          setHasPaidSubscription(false);
+        }
+      } catch (err) {
+        setHasPaidSubscription(false);
+      } finally {
+        setCheckingSubscription(false);
+      }
+    };
+
+    checkPaidSubscription();
+  }, [address]);
 
   const validateFile = (file) => {
     if (!ALLOWED_FILE_TYPES.includes(file.type)) {
@@ -307,7 +363,6 @@ const HomePage = () => {
       const redactedText = redactSensitiveInfo(rawText);
       toast.dismiss('redact');
 
-     
       
       const response = await fetch(`${API_URL}/analyze-text`, {
         method: 'POST',
@@ -336,7 +391,6 @@ const HomePage = () => {
       toast.success(`Found ${data.subscriptionCount} subscriptions!`);
 
     } catch (error) {
-      console.error('Analysis error:', error);
       toast.error(error.message || 'Failed to analyze file. Please try again.');
     } finally {
       setIsAnalyzing(false);
@@ -350,6 +404,56 @@ const HomePage = () => {
     disabled: isAnalyzing
   });
 
+  // ==================== HELPER FUNCTIONS ====================
+  // Helper function to save paid subscription to Supabase
+  const savePaidSubscription = async (walletAddress, txHash, chainId) => {
+    try {
+      const { data, error } = await supabase
+        .from('paid_subscriptions')
+        .upsert({
+          wallet_address: walletAddress.toLowerCase(),
+          chain_id: chainId,
+          tx_hash: txHash,
+          amount: 5.00,
+          last_verified_at: new Date().toISOString()
+        }, {
+          onConflict: 'wallet_address',
+          ignoreDuplicates: false
+        });
+
+      if (error) {
+        return false;
+      }
+
+      setHasPaidSubscription(true);
+      return true;
+    } catch (err) {
+      return false;
+    }
+  };
+
+  // Helper function to verify ownership for existing subscribers
+  const verifySubscriptionOwnership = async (walletAddress) => {
+    try {
+      const message = `ForgetSubs: Verify wallet ownership for ${walletAddress} at ${Date.now()}`;
+      const signature = await signMessageAsync({ message });
+
+      // Update last_verified_at in Supabase
+      const { error } = await supabase
+        .from('paid_subscriptions')
+        .update({ last_verified_at: new Date().toISOString() })
+        .eq('wallet_address', walletAddress.toLowerCase());
+
+      if (error) {
+        return false;
+      }
+
+      return true;
+    } catch (err) {
+      return false;
+    }
+  };
+
   // ==================== PAYMENT UNLOCK ====================
   const handlePayUnlock = async () => {
     if (!isConnected) {
@@ -362,6 +466,61 @@ const HomePage = () => {
       return;
     }
 
+    // Check if user already has paid subscription
+    if (hasPaidSubscription) {
+      // Just verify ownership with signature
+      setVerifyStatus('processing');
+      setVerifyError('');
+
+      try {
+        const verified = await verifySubscriptionOwnership(address);
+        
+        if (!verified) {
+          throw new Error('Ownership verification failed');
+        }
+
+        setVerifyStatus('verifying');
+        
+        // Unlock the report
+        const unlockResponse = await fetch(`${API_URL}/unlock-report`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            reportId,
+            method: 'payment',
+            walletAddress: address.toLowerCase(),
+            existingSubscriber: true
+          })
+        });
+
+        if (!unlockResponse.ok) {
+          const errorData = await unlockResponse.json();
+          throw new Error(errorData.error || 'Failed to unlock report');
+        }
+
+        const unlockData = await unlockResponse.json();
+        setDetailedReport(unlockData.detailedData);
+        setVerifyStatus('success');
+        toast.success('Report unlocked successfully!');
+        
+        setTimeout(() => setVerifyStatus('idle'), 2000);
+
+      } catch (err) {
+        
+        // Check if user rejected the signature
+        if (err.message?.includes('User rejected') || err.message?.includes('User denied')) {
+          setVerifyStatus('denied');
+          setVerifyError('Transaction cancelled by user');
+          setTimeout(() => setVerifyStatus('idle'), 3000);
+        } else {
+          setVerifyStatus('error');
+          setVerifyError(err.message || 'Verification failed');
+        }
+      }
+      return;
+    }
+
+    // User needs to pay - proceed with payment flow
     setVerifyStatus('processing');
     setVerifyError('');
 
@@ -388,6 +547,9 @@ const HomePage = () => {
 
       await publicClient.waitForTransactionReceipt({ hash: txHash });
       toast.dismiss('tx-confirm');
+
+      // Save to Supabase
+      await savePaidSubscription(address, txHash, chainId);
 
       const unlockResponse = await fetch(`${API_URL}/unlock-report`, {
         method: 'POST',
@@ -427,14 +589,19 @@ const HomePage = () => {
           });
           localStorage.removeItem('referrer_code');
         } catch (refErr) {
-          console.error('Referral claim error:', refErr);
         }
       }
     } catch (error) {
-      console.error('Payment unlock error:', error);
-      setVerifyStatus('error');
-      setVerifyError(error.message || 'Payment failed. Please try again.');
-      toast.error(error.message || 'Payment failed');
+      
+      // Check if user rejected the transaction
+      if (error.message?.includes('User rejected') || error.message?.includes('User denied')) {
+        setVerifyStatus('denied');
+        setVerifyError('Transaction cancelled by user');
+        setTimeout(() => setVerifyStatus('idle'), 3000);
+      } else {
+        setVerifyStatus('error');
+        setVerifyError(error.message || 'Payment failed. Please try again.');
+      }
     }
   };
 
@@ -482,10 +649,16 @@ const HomePage = () => {
 
       setTimeout(() => setVerifyStatus('idle'), 2000);
     } catch (error) {
-      console.error('NFT unlock error:', error);
-      setVerifyStatus('error');
-      setVerifyError(error.message || 'NFT verification failed');
-      toast.error(error.message || 'NFT verification failed');
+      
+      // Check if user rejected the signature
+      if (error.message?.includes('User rejected') || error.message?.includes('User denied')) {
+        setVerifyStatus('denied');
+        setVerifyError('Transaction cancelled by user');
+        setTimeout(() => setVerifyStatus('idle'), 3000);
+      } else {
+        setVerifyStatus('error');
+        setVerifyError(error.message || 'NFT verification failed');
+      }
     }
   };
 
@@ -565,7 +738,7 @@ const HomePage = () => {
           <div className="dashboard-top-row">
             <div className="stats-column">
               <div className="stat-card">
-                <div className="stat-label">Estimated Annual Waste</div>
+                <div className="stat-label">Estimated Annual Money Leak</div>
                 <div className="stat-value green">
                   {summaryData.currencySymbol}{summaryData.totalAnnualWaste.toFixed(2)}
                 </div>
@@ -613,14 +786,43 @@ const HomePage = () => {
                 <div className="paywall-icon-circle"><Lock size={36} color="#00ffa3" /></div>
                 <h3 className="paywall-title">Unlock Detailed Report</h3>
                 <p className="paywall-desc">Reveal merchant names, exact dates, and one-click cancellation links.</p>
+                
+                {hasPaidSubscription && !checkingSubscription && (
+                  <div style={{ 
+                    marginBottom: '1rem', 
+                    padding: '0.75rem',
+                    background: 'rgba(0, 255, 163, 0.1)',
+                    border: '1px solid rgba(0, 255, 163, 0.3)',
+                    borderRadius: '8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.5rem',
+                    color: '#00ffa3',
+                    fontSize: '0.9rem'
+                  }}>
+                    <CheckCircle2 size={16} />
+                    <span>You have lifetime access - just verify ownership to unlock!</span>
+                  </div>
+                )}
+                
                 <div className="unlock-options">
-                  <button onClick={handlePayUnlock} disabled={verifyStatus !== 'idle'} className="unlock-btn">
-                    <div className="btn-content">
-                      <div className="btn-title"><Coins size={18} color="#00ffa3" /> Pay 5 USDC</div>
-                      <span className="btn-sub">Monad • BSC • Base • Ethereum</span>
-                    </div>
-                    <ArrowRight size={20} />
-                  </button>
+                  {hasPaidSubscription ? (
+                    <button onClick={handlePayUnlock} disabled={verifyStatus !== 'idle'} className="unlock-btn">
+                      <div className="btn-content">
+                        <div className="btn-title"><CheckCircle2 size={18} color="#00ffa3" /> Verify Ownership</div>
+                        <span className="btn-sub">You have lifetime access - just sign to verify</span>
+                      </div>
+                      <ArrowRight size={20} />
+                    </button>
+                  ) : (
+                    <button onClick={handlePayUnlock} disabled={verifyStatus !== 'idle'} className="unlock-btn">
+                      <div className="btn-content">
+                        <div className="btn-title"><Coins size={18} color="#00ffa3" /> Pay 5 USDC</div>
+                        <span className="btn-sub">Monad • BSC • Base • Ethereum</span>
+                      </div>
+                      <ArrowRight size={20} />
+                    </button>
+                  )}
                   <button onClick={handleNftUnlock} disabled={verifyStatus !== 'idle'} className="unlock-btn">
                     <div className="btn-content">
                       <div className="btn-title"><Gem size={18} color="#60efff" /> Holder Unlock</div>
@@ -654,6 +856,7 @@ const HomePage = () => {
                         <th>Monthly Charges</th>
                         <th>Paid Total</th>
                         <th>Paid Months</th>
+                        <th>Last Paid Date</th>
                         <th>Yearly Cost</th>
                         <th>Action</th>
                       </tr>
@@ -670,6 +873,9 @@ const HomePage = () => {
                           <td>{detailedReport.currencySymbol}{sub.monthlyAmount.toFixed(2)}</td>
                           <td>{detailedReport.currencySymbol}{sub.totalPaid.toFixed(2)}</td>
                           <td>{sub.paidMonths}</td>
+                          <td style={{ fontSize: '0.9rem', color: 'var(--text-dim)' }}>
+                            {sub.lastDate || 'N/A'}
+                          </td>
                           <td style={{ color: 'var(--primary)', fontWeight: 'bold' }}>
                             {detailedReport.currencySymbol}{sub.annualCost.toFixed(2)}
                           </td>
@@ -687,6 +893,52 @@ const HomePage = () => {
                       ))}
                     </tbody>
                   </table>
+                </div>
+                
+                {/* Share on X Button */}
+                <div style={{ 
+                  marginTop: '2rem', 
+                  paddingTop: '2rem', 
+                  borderTop: '1px solid var(--card-border)',
+                  display: 'flex',
+                  justifyContent: 'center'
+                }}>
+                  <button
+                    onClick={() => {
+                      const text = `I just discovered I'm wasting ${detailedReport.currencySymbol}${summaryData.totalAnnualWaste.toFixed(2)}/year on forgotten subscriptions using ForgetSubs! 💸
+
+Check your money leaks: https://forgetsubs.com`;
+                      const twitterUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`;
+                      window.open(twitterUrl, '_blank', 'width=550,height=420');
+                    }}
+                    style={{
+                      background: '#1DA1F2',
+                      border: 'none',
+                      padding: '0.75rem 2rem',
+                      borderRadius: '12px',
+                      color: '#fff',
+                      fontWeight: '600',
+                      fontSize: '1rem',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                      transition: 'transform 0.2s, background 0.2s'
+                    }}
+                    onMouseOver={(e) => {
+                      e.target.style.transform = 'scale(1.05)';
+                      e.target.style.background = '#1a8cd8';
+                    }}
+                    onMouseOut={(e) => {
+                      e.target.style.transform = 'scale(1)';
+                      e.target.style.background = '#1DA1F2';
+                    }}
+                  >
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+                    </svg>
+                    Share on X
+                  </button>
                 </div>
               </div>
             )}
@@ -725,7 +977,7 @@ function App() {
   const [searchParams] = useSearchParams();
   const { pathname } = useLocation();
 
-  useEffect(() => {
+ useEffect(() => {
     const ref = searchParams.get('ref');
     if (ref) {
       localStorage.setItem('referrer_code', ref);

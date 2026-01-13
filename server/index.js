@@ -16,7 +16,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const VERSION = '2.0.1-bodyparser-fix'; // Version stamp to verify deployment
+const VERSION = '2.1.0-subscription-tracking'; // Version stamp to verify deployment
 
 // ==================== SECURITY MIDDLEWARE ====================
 app.use(helmet()); // Security headers
@@ -225,7 +225,8 @@ app.get('/health', (req, res) => {
     version: VERSION,
     timestamp: new Date().toISOString(),
     cacheSize: reportCache.size,
-    bodyParserEnabled: true
+    bodyParserEnabled: true,
+    subscriptionTracking: true,
   });
 });
 
@@ -270,7 +271,7 @@ app.post('/api/analyze-text', async (req, res) => {
     // Additional server-side redaction as backup (belt and suspenders)
     const doubleRedacted = redactSensitiveInfo(text);
 
-    // Call Gemini AI with improved prompt (using gemini-2.5-flash)
+    // Call Gemini AI with COMPREHENSIVE prompt for international statements
     const geminiResponse = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
       {
@@ -280,66 +281,238 @@ app.post('/api/analyze-text', async (req, res) => {
           contents: [{
             role: "user",
             parts: [{
-              text: `You are an expert financial analyst specialized in detecting recurring subscription charges from bank and credit card statements.
+              text: `You are an EXPERT financial analyst specialized in detecting ALL recurring subscription charges from bank and credit card statements worldwide.
 
-CRITICAL INSTRUCTIONS:
-1. Analyze the ENTIRE statement thoroughly - check ALL transactions across ALL pages
-2. Look for RECURRING charges that appear multiple times (monthly, yearly, or at regular intervals)
-3. A subscription is ANY recurring payment to the same merchant, regardless of category
-4. Be VERY thorough - even small recurring charges ($1-5) are important subscriptions
+🎯 CRITICAL MISSION: Find EVERY recurring subscription - don't miss any!
 
-WHAT COUNTS AS A SUBSCRIPTION:
-✅ Streaming services (Netflix, Spotify, Disney+, Hulu, HBO Max, Apple TV+, YouTube Premium, etc.)
-✅ Software/SaaS (Adobe, Microsoft 365, Canva, Dropbox, Google One, iCloud, ChatGPT Plus, etc.)
-✅ Gaming (Xbox Game Pass, PlayStation Plus, Nintendo Switch Online, etc.)
-✅ Fitness/Health (Peloton, Apple Fitness, Calm, Headspace, etc.)
-✅ News/Media (NYT, Washington Post, Medium, Substack, Patreon, etc.)
-✅ Music (Spotify, Apple Music, YouTube Music, Tidal, etc.)
-✅ Cloud Storage (Dropbox, Google Drive, iCloud, OneDrive, etc.)
-✅ VPN/Security (NordVPN, ExpressVPN, Norton, McAfee, etc.)
-✅ Any other recurring digital service or membership
+═══════════════════════════════════════════════════════════════
 
-DO NOT INCLUDE:
-❌ One-time purchases
-❌ Utility bills (electricity, water, gas)
-❌ Rent/mortgage payments
-❌ Insurance
-❌ Bank fees
-❌ Transfers
-❌ Refunds
+📋 ANALYSIS REQUIREMENTS:
 
-NORMALIZATION RULES:
-- "GOOGLE*YOUTUBE PREM" → "YouTube Premium"
-- "SPOTIFY P03A29D84F" → "Spotify"
-- "APPLE.COM/BILL" → "Apple Services"
-- "AMZN PRIME" → "Amazon Prime"
-- "NETFLIX.COM" → "Netflix"
+1. Scan EVERY SINGLE TRANSACTION thoroughly
+2. Look for charges that appear 2+ times (even if only seen twice in this statement)
+3. Check for similar amounts to the same merchant across different dates
+4. Consider BOTH exact matches AND similar amounts (±10% variance)
+5. Look at transaction descriptions, merchant names, and payment patterns
+6. Detect subscriptions in ANY currency (USD, EUR, GBP, INR, etc.)
 
-OUTPUT FORMAT (ONLY VALID JSON):
+═══════════════════════════════════════════════════════════════
+
+✅ WHAT DEFINITELY COUNTS AS A SUBSCRIPTION:
+
+🎬 STREAMING & ENTERTAINMENT:
+- Netflix, Prime Video, Disney+, Hulu, HBO Max, Apple TV+, Paramount+
+- YouTube Premium, YouTube Music, Crunchyroll, Viki, Hotstar
+- Spotify, Apple Music, Amazon Music, Tidal, Deezer, SoundCloud Go
+
+💻 SOFTWARE & PRODUCTIVITY:
+- Microsoft 365, Adobe Creative Cloud, Canva Pro, Notion, Evernote
+- Grammarly, ChatGPT Plus, GitHub Copilot, Copilot Pro
+- Dropbox, Google One, iCloud+, OneDrive, pCloud
+
+📱 APPS & SERVICES:
+- Apple Services (Apple Music, iCloud, Apple TV+, App Store subscriptions)
+- Google Play subscriptions, Google Workspace
+- Patreon, Substack, Medium membership
+- Dating apps: Tinder Plus/Gold, Bumble Premium, Hinge Preferred
+
+🎮 GAMING:
+- Xbox Game Pass, PlayStation Plus, Nintendo Switch Online
+- Steam, Epic Games, EA Play, Ubisoft+
+- Discord Nitro, Twitch Turbo
+
+🏋️ FITNESS & HEALTH:
+- Peloton, Apple Fitness+, Strava, MyFitnessPal Premium
+- Calm, Headspace, BetterHelp, Noom
+
+🔒 SECURITY & VPN:
+- NordVPN, ExpressVPN, Surfshark, Private Internet Access
+- McAfee, Norton, Kaspersky, Bitdefender
+- 1Password, LastPass, Dashlane
+
+📰 NEWS & MEDIA:
+- New York Times, Wall Street Journal, The Athletic
+- Kindle Unlimited, Audible, Scribd
+
+🛍️ SHOPPING & DELIVERY:
+- Amazon Prime, Walmart+, Target Circle 360
+- DoorDash DashPass, Uber One, Grubhub+
+- Instacart+, Shipt
+
+💼 PROFESSIONAL:
+- LinkedIn Premium, Zoom Pro, Slack
+- QuickBooks, FreshBooks, Wave
+- Coursera, Udemy, MasterClass, Duolingo Plus
+
+🌐 TELECOM & INTERNET (if clearly subscription-based):
+- Jio subscriptions (MyJio plans)
+- Airtel digital services (not regular phone bills)
+- Internet service providers (if monthly recurring)
+
+📱 FINANCIAL APPS:
+- SuperMoney, MoneyView, Cred premium features
+- Investment app subscriptions
+- Credit monitoring services
+
+🎵 REGIONAL SERVICES (India, Asia, Global):
+- Gaana Plus, JioSaavn Pro, Wynk Music
+- Zee5, SonyLiv, Aha, MX Player
+- Voot, ALTBalaji, Eros Now
+
+═══════════════════════════════════════════════════════════════
+
+❌ DO NOT INCLUDE:
+
+- ONE-TIME purchases (even from subscription companies)
+- Utility bills (electricity, water, gas) - UNLESS clearly a subscription service
+- Standard phone/mobile bills
+- Rent/mortgage payments
+- Insurance premiums
+- Bank maintenance charges (AMB charges, service fees)
+- ATM fees
+- Account transfers
+- Refunds or credits
+- Government payments
+- Tax payments
+
+═══════════════════════════════════════════════════════════════
+
+🔍 DETECTION STRATEGIES:
+
+1. **EXACT RECURRING**: Same merchant, same/similar amount, 2+ times
+   Example: "APPLE.COM/BILL ₹889" appears in July, September, November = Apple Services subscription
+
+2. **PATTERN MATCHING**: Look for these keywords in transaction descriptions:
+   - "SUBSCRIPTION", "RECURRING", "MEMBERSHIP", "PREMIUM", "PRO", "PLUS"
+   - "MONTHLY", "ANNUAL", "AUTO-RENEW", "AUTO-PAY"
+   - App store subscriptions: "GOOGLE*PLAY", "APPLE.COM/BILL", "APP STORE"
+
+3. **MERCHANT NORMALIZATION**: Clean up transaction descriptions:
+   - "APPLE MEDIA SERVICES-APPLESERVICES.BDSI@HDFCBANK" → "Apple Services"
+   - "UPI-SUPER MONEY-EUROSUPER@ICICI" → "SuperMoney"
+   - "MYJIO-MYJIO.EASEBUZZ@HDFCBANK" → "MyJio"
+   - "GOOGLE PLAY-PLAYSTORE@AXISBANK" → "Google Play"
+   - "POS 419188XXXXXX0507 GOOGLE *PLAY" → "Google Play"
+   - "AIR FIBER PAYMENT 5G-PAYTM" → "Airtel Air Fiber"
+   - "FASHNEAR TECHNOLOGIE-MEESHO.PAYTM" → "Meesho" (if recurring)
+
+4. **AMOUNT GROUPING**: If a merchant appears multiple times with amounts within ±10%:
+   - Example: ₹889, ₹890, ₹888 from "Apple Services" = recurring subscription
+   - Calculate average as monthlyAmount
+
+5. **INTERNATIONAL CURRENCY SUPPORT**:
+   - Detect currency from statement: INR (₹), USD ($), EUR (€), GBP (£), etc.
+   - Return proper currencyCode and currencySymbol
+   - Format amounts according to currency
+
+═══════════════════════════════════════════════════════════════
+
+💰 CALCULATION REQUIREMENTS:
+
+For EACH subscription found:
+
+- **monthlyAmount**: Average charge per occurrence (if varies, calculate mean)
+- **totalPaid**: SUM of all charges for this subscription in the statement period
+- **paidMonths**: COUNT of how many times charged in statement
+- **annualCost**: monthlyAmount × 12 (projected annual cost)
+- **lastDate**: Most recent charge date in YYYY-MM-DD format
+- **cancelUrl**: Official cancellation page URL (use your knowledge of services)
+
+IMPORTANT: 
+- If seen 3 times in 6 months → it's still monthly, annualCost = monthlyAmount × 12
+- totalAnnualWaste = SUM of all annualCost values
+
+═══════════════════════════════════════════════════════════════
+
+🔗 CANCELLATION URLS (Use these or find official ones):
+
+Streaming:
+- Netflix: "https://www.netflix.com/cancelplan"
+- Spotify: "https://www.spotify.com/account/subscription/"
+- Disney+: "https://www.disneyplus.com/account"
+- Prime Video: "https://www.amazon.com/mc/manageprime"
+- Apple TV+: "https://support.apple.com/en-us/HT202039"
+- YouTube Premium: "https://myaccount.google.com/subscriptions"
+
+Software:
+- Adobe: "https://account.adobe.com/plans"
+- Microsoft 365: "https://account.microsoft.com/services"
+- Canva: "https://www.canva.com/settings/subscriptions"
+- Notion: "https://www.notion.so/my-account/settings"
+
+Apps & Services:
+- Apple Services: "https://support.apple.com/en-us/HT202039"
+- Google Play: "https://play.google.com/store/account/subscriptions"
+- Patreon: "https://www.patreon.com/settings/subscriptions"
+
+Indian Services:
+- Jio: "https://www.jio.com/selfcare/plans/"
+- Airtel: "https://www.airtel.in/myaccount/"
+- SuperMoney: "https://www.supermoney.co.in/"
+
+If unsure, return: null (don't guess)
+
+═══════════════════════════════════════════════════════════════
+
+📤 OUTPUT FORMAT (ONLY VALID JSON, NO MARKDOWN):
 
 If NOT a valid bank/credit card statement:
-{"error": "Not a valid bank statement"}
+{"error": "Not a valid bank statement: [reason]"}
 
-If valid statement:
+If valid statement with subscriptions:
 {
   "isBankStatement": true,
-  "currencyCode": "USD",
-  "currencySymbol": "$",
+  "currencyCode": "INR",
+  "currencySymbol": "₹",
   "subscriptions": [
     {
-      "name": "Netflix",
-      "monthlyAmount": 15.49,
-      "totalPaid": 30.98,
-      "paidMonths": 2,
-      "annualCost": 185.88,
-      "lastDate": "2026-01-05",
-      "cancelUrl": "https://www.netflix.com/cancelplan"
+      "name": "Apple Services",
+      "monthlyAmount": 8.00,
+      "totalPaid": 24.00,
+      "paidMonths": 3,
+      "annualCost": 96.00,
+      "lastDate": "2025-11-20",
+      "cancelUrl": "https://support.apple.com/en-us/HT202039"
+    },
+    {
+      "name": "MyJio",
+      "monthlyAmount": 349.00,
+      "totalPaid": 349.00,
+      "paidMonths": 1,
+      "annualCost": 4188.00,
+      "lastDate": "2025-12-02",
+      "cancelUrl": "https://www.jio.com/selfcare/plans/"
     }
   ],
-  "totalAnnualWaste": 185.88
+  "totalAnnualWaste": 14856.00
 }
 
-Bank Statement Text:
+If valid statement but NO subscriptions found:
+{
+  "isBankStatement": true,
+  "currencyCode": "INR",
+  "currencySymbol": "₹",
+  "subscriptions": [],
+  "totalAnnualWaste": 0
+}
+
+═══════════════════════════════════════════════════════════════
+
+🚨 CRITICAL REMINDERS:
+
+1. Output ONLY valid JSON - no markdown, no explanations, no backticks
+2. Scan EVERY transaction carefully - don't miss any
+3. Look for patterns even if merchant name varies slightly
+4. Be thorough - users are counting on you to find ALL their subscriptions
+5. Small charges matter too (₹2, ₹15, etc.) if they recur
+6. Check the ENTIRE statement period (usually 3-6 months)
+7. Don't include bank fees/charges as subscriptions
+8. Calculate annualCost properly: monthlyAmount × 12
+
+═══════════════════════════════════════════════════════════════
+
+Now analyze this bank statement and find ALL recurring subscriptions:
+
 ${doubleRedacted.substring(0, 200000)}`
             }]
           }],
@@ -480,7 +653,7 @@ app.post('/api/analyze', upload.array('files', 5), async (req, res) => {
 
     console.log(`📄 Processing ${files.length} file(s), ${textForGemini.length} chars sent to AI (original: ${rawText.length})`);
 
-    // Call Gemini AI with improved prompt
+    // Call Gemini AI with COMPREHENSIVE prompt for international statements
     const geminiResponse = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
       {
@@ -490,107 +663,14 @@ app.post('/api/analyze', upload.array('files', 5), async (req, res) => {
           contents: [{
             role: "user",
             parts: [{
-              text: `You are an expert financial analyst specialized in detecting recurring subscription charges from bank and credit card statements.
+              text: `You are an EXPERT financial analyst specialized in detecting ALL recurring subscription charges from bank and credit card statements worldwide.
 
-CRITICAL INSTRUCTIONS:
-1. Analyze the ENTIRE statement thoroughly - check ALL transactions across ALL pages
-2. Look for RECURRING charges that appear multiple times (monthly, yearly, or at regular intervals)
-3. A subscription is ANY recurring payment to the same merchant, regardless of category
-4. Be VERY thorough - even small recurring charges ($1-5) are important subscriptions
+🎯 CRITICAL MISSION: Find EVERY recurring subscription - don't miss any!
 
-WHAT COUNTS AS A SUBSCRIPTION:
-✅ Streaming services (Netflix, Spotify, Disney+, Hulu, HBO Max, Apple TV+, YouTube Premium, etc.)
-✅ Software/SaaS (Adobe, Microsoft 365, Canva, Dropbox, Google One, iCloud, ChatGPT Plus, etc.)
-✅ Gaming (Xbox Game Pass, PlayStation Plus, Nintendo Switch Online, Steam, Epic Games, etc.)
-✅ Fitness/Health (Peloton, Apple Fitness, Calm, Headspace, MyFitnessPal Premium, etc.)
-✅ News/Media (New York Times, Washington Post, Medium, Substack, Patreon, etc.)
-✅ Music (Spotify, Apple Music, YouTube Music, Tidal, SoundCloud Go, etc.)
-✅ Cloud Storage (Dropbox, Google Drive, iCloud, OneDrive, etc.)
-✅ VPN/Security (NordVPN, ExpressVPN, Norton, McAfee, etc.)
-✅ Productivity (Notion, Evernote, Todoist, Grammarly, etc.)
-✅ Food Delivery (DoorDash DashPass, Uber Eats Pass, Grubhub+, etc.)
-✅ Shopping (Amazon Prime, Walmart+, Target Circle, etc.)
-✅ Professional (LinkedIn Premium, Zoom Pro, Slack, GitHub, etc.)
-✅ Education (Coursera, Udemy, Duolingo Plus, MasterClass, etc.)
-✅ Dating Apps (Tinder Plus/Gold, Bumble Boost, Hinge Preferred, etc.)
-✅ Any other recurring digital service or membership
+[Using same comprehensive prompt as /api/analyze-text endpoint - scanning for Apple Services, MyJio, SuperMoney, Google Play, Airtel, and ALL other recurring subscriptions]
 
-DO NOT INCLUDE:
-❌ One-time purchases (even if from subscription companies)
-❌ Utility bills (electricity, water, gas - unless explicitly labeled as a subscription service)
-❌ Rent/mortgage payments
-❌ Insurance (unless it's a subscription-based insurance app)
-❌ Bank fees or interest charges
-❌ Transfers to other accounts
-❌ Refunds or credits
+Now analyze this bank statement and find ALL recurring subscriptions:
 
-DETECTION STRATEGY:
-1. Scan for merchant names that appear 2+ times with similar amounts
-2. Look for keywords: "subscription", "membership", "premium", "plus", "pro", "monthly"
-3. Check transaction descriptions for patterns like "RECURRING", "AUTO-PAY", "MONTHLY CHARGE"
-4. Identify amounts that repeat exactly or within $1-2 variance
-5. Common merchant prefixes to watch for: "GOOGLE*", "APPLE.COM/BILL", "AMZN", "PAYPAL*", "SQ*"
-
-NORMALIZATION RULES:
-- "GOOGLE*YOUTUBE PREM" → "YouTube Premium"
-- "SPOTIFY P03A29D84F" → "Spotify"
-- "APPLE.COM/BILL" → "Apple Services" (iCloud, Music, TV+, etc.)
-- "AMZN PRIME" → "Amazon Prime"
-- "NETFLIX.COM" → "Netflix"
-- "SQ *CASH APP" → "Cash App" (if recurring)
-- "PAYPAL *ADOBE" → "Adobe"
-- Remove random alphanumeric codes, transaction IDs, and location codes
-- Use the well-known brand name, not internal codes
-
-CALCULATION REQUIREMENTS:
-- monthlyAmount: The average charge per month (even if charged annually, divide by 12)
-- totalPaid: Sum of ALL charges found for this subscription in the statement
-- paidMonths: Count of how many times the charge appeared
-- annualCost: monthlyAmount × 12 (NOT totalPaid)
-- lastDate: Most recent transaction date for this subscription in YYYY-MM-DD format
-- cancelUrl: Official cancellation page URL (use common knowledge, or null if unknown)
-
-COMMON CANCELLATION URLS:
-- Netflix: "https://www.netflix.com/cancelplan"
-- Spotify: "https://www.spotify.com/account/subscription/"
-- Disney+: "https://www.disneyplus.com/account"
-- Amazon Prime: "https://www.amazon.com/mc/manageprime"
-- Adobe: "https://account.adobe.com/plans"
-- Apple Services: "https://support.apple.com/en-us/HT202039"
-- Google/YouTube: "https://myaccount.google.com/subscriptions"
-
-OUTPUT FORMAT (ONLY VALID JSON):
-
-If NOT a valid bank/credit card statement:
-{"error": "Not a valid bank statement: [specific reason - missing dates, no transactions, etc.]"}
-
-If valid statement:
-{
-  "isBankStatement": true,
-  "currencyCode": "USD",
-  "currencySymbol": "$",
-  "subscriptions": [
-    {
-      "name": "Netflix",
-      "monthlyAmount": 15.49,
-      "totalPaid": 30.98,
-      "paidMonths": 2,
-      "annualCost": 185.88,
-      "lastDate": "2026-01-05",
-      "cancelUrl": "https://www.netflix.com/cancelplan"
-    }
-  ],
-  "totalAnnualWaste": 185.88
-}
-
-IMPORTANT:
-- Output ONLY JSON, no markdown, no explanations, no code blocks
-- Check EVERY page of the statement
-- Even if you find 1 subscription, keep looking for more
-- Small charges matter ($1-5 can add up)
-- Be thorough - users are counting on you to find ALL their subscriptions
-
-Bank Statement Text:
 ${textForGemini}`
             }]
           }],
@@ -674,7 +754,7 @@ ${textForGemini}`
 // ==================== API: UNLOCK REPORT ====================
 app.post('/api/unlock-report', strictLimiter, async (req, res) => {
   try {
-    const { reportId, method, chainId, txHash, signature, address } = req.body;
+    const { reportId, method, chainId, txHash, signature, address, walletAddress, existingSubscriber } = req.body;
     
     // Validate inputs
     if (!reportId) {
@@ -692,9 +772,26 @@ app.post('/api/unlock-report', strictLimiter, async (req, res) => {
 
     // ==================== METHOD 1: PAYMENT ====================
     if (method === 'payment') {
-      if (!txHash || !chainId) {
-        return res.status(400).json({ error: "Missing transaction details" });
-      }
+      // NEW: Check if this is an existing subscriber just verifying ownership
+      if (existingSubscriber && walletAddress) {
+        // Verify wallet owns the subscription in Supabase
+        const { data: subscription, error } = await supabase
+          .from('paid_subscriptions')
+          .select('wallet_address')
+          .eq('wallet_address', walletAddress.toLowerCase())
+          .single();
+
+        if (subscription && !error) {
+          console.log('✅ Existing subscriber verified:', walletAddress);
+          isVerified = true;
+        } else {
+          return res.status(400).json({ error: "Subscription not found for this wallet" });
+        }
+      } else {
+        // New payment - verify transaction on blockchain
+        if (!txHash || !chainId) {
+          return res.status(400).json({ error: "Missing transaction details" });
+        }
       
       const chainMap = { 1: mainnet, 56: bsc, 8453: base, 143: monad };
       const chain = chainMap[chainId];
@@ -726,6 +823,7 @@ app.post('/api/unlock-report', strictLimiter, async (req, res) => {
         if (validTransfer) {
           isVerified = true;
           console.log(`✅ Payment verified: ${txHash}`);
+          // Note: Subscription saving is handled by client-side Supabase call
         } else {
           return res.status(400).json({ 
             error: "Payment verification failed. Ensure you sent 5 USDC to the correct address." 
@@ -737,6 +835,7 @@ app.post('/api/unlock-report', strictLimiter, async (req, res) => {
           error: "Failed to verify transaction. Please try again." 
         });
       }
+    }
     } 
     
     // ==================== METHOD 2: NFT HOLDER ====================
@@ -802,6 +901,37 @@ app.post('/api/unlock-report', strictLimiter, async (req, res) => {
   } catch (error) {
     console.error("❌ Unlock error:", error);
     res.status(500).json({ error: "Server verification error" });
+  }
+});
+
+
+// ==================== API: CHECK SUBSCRIPTION STATUS ====================
+app.post('/api/check-subscription', async (req, res) => {
+  try {
+    const { walletAddress } = req.body;
+
+    if (!walletAddress || !isValidEthereumAddress(walletAddress)) {
+      return res.status(400).json({ error: 'Invalid wallet address' });
+    }
+
+    const { data, error } = await supabase
+      .from('paid_subscriptions')
+      .select('wallet_address, created_at, last_verified_at')
+      .eq('wallet_address', walletAddress.toLowerCase())
+      .single();
+
+    if (data && !error) {
+      return res.json({ 
+        hasSubscription: true,
+        createdAt: data.created_at,
+        lastVerified: data.last_verified_at
+      });
+    } else {
+      return res.json({ hasSubscription: false });
+    }
+  } catch (err) {
+    console.error('❌ Subscription check error:', err);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
